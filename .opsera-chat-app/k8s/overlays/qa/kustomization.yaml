@@ -28,10 +28,10 @@ resources:
 images:
   - name: chat-app-frontend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chat-app-frontend
-    newTag: 13db2be-20260128135651
+    newTag: e1da75e-20260128144310
   - name: chat-app-backend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chat-app-backend
-    newTag: 13db2be-20260128135651
+    newTag: e1da75e-20260128144310
 
 labels:
   - pairs:
