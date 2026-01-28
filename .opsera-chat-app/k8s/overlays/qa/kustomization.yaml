@@ -28,11 +28,11 @@ resources:
 
 images:
   - name: chat-app-frontend
-    newName: PLACEHOLDER_ECR_URI/chat-app-frontend
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chat-app-frontend
+    newTag: 13db2be-20260128135651
   - name: chat-app-backend
-    newName: PLACEHOLDER_ECR_URI/chat-app-backend
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chat-app-backend
+    newTag: 13db2be-20260128135651
 
 commonLabels:
   environment: qa
