@@ -18,8 +18,8 @@ spec:
   project: default
   
   source:
-    # Repository URL will be updated by bootstrap workflow
-    repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git
+    # Repository URL
+    repoURL: https://github.com/srinivas-opsera/chat-app.git
     targetRevision: HEAD
     path: .opsera-chat-app/k8s/overlays/qa
     
