@@ -15,6 +15,8 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   ingressClassName: nginx
   tls:
@@ -33,9 +35,9 @@ spec:
                 name: frontend
                 port:
                   number: 80
-          # Backend API - /api/* routes to FastAPI
-          - path: /api
-            pathType: Prefix
+          # Backend API - /api/* routes to FastAPI (strips /api prefix)
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: backend

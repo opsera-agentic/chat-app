@@ -11,6 +11,10 @@ metadata:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   ingressClassName: nginx
   tls:
@@ -21,22 +25,25 @@ spec:
     - host: opsera-chat-app-qa.agent.opsera.dev
       http:
         paths:
-          - path: /
-            pathType: Prefix
+          # Frontend - serve React app
+          - path: /()(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: frontend
                 port:
                   number: 80
-          - path: /api
-            pathType: Prefix
+          # Backend API - /api/* routes to FastAPI (strips /api prefix)
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: backend
                 port:
                   number: 8000
-          - path: /health
-            pathType: Exact
+          # Health check endpoint
+          - path: /health(/|$)(.*)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: backend
