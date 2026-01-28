@@ -1,0 +1,86 @@
+# Check pod logs to diagnose crash
+name: "📜 Get Pod Logs"
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  SPOKE_CLUSTER: opsera-usw2-np
+  NAMESPACE: chat-app-qa
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  get-logs:
+    name: "📜 Get Backend Pod Logs"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Connect to Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Get Backend Pod Logs
+        run: |
+          echo "## 📜 Backend Pod Logs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get first backend pod
+          POD=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=backend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          
+          if [ -n "$POD" ]; then
+            echo "Pod: $POD"
+            echo "### Pod: \`$POD\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "### Current Logs" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            kubectl logs $POD -n ${{ env.NAMESPACE }} --tail=100 2>&1 | tee -a $GITHUB_STEP_SUMMARY || echo "No logs available"
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Previous Container Logs (if crashed)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            kubectl logs $POD -n ${{ env.NAMESPACE }} --previous --tail=100 2>&1 | tee -a $GITHUB_STEP_SUMMARY || echo "No previous logs"
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Pod Description" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            kubectl describe pod $POD -n ${{ env.NAMESPACE }} 2>&1 | tail -50 | tee -a $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No backend pods found"
+            echo "❌ No backend pods found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Get Frontend Pod Status (for comparison)
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📜 Frontend Pod Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          POD=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          
+          if [ -n "$POD" ]; then
+            echo "### Pod: \`$POD\`" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            kubectl logs $POD -n ${{ env.NAMESPACE }} --tail=20 2>&1 | tee -a $GITHUB_STEP_SUMMARY || echo "No logs"
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
