@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: chat-app-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    restart: unless-stopped
+    networks:
+      - chat-network
+
+  frontend:
+    build: ./frontend
+    container_name: chat-app-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chat-network
+
+networks:
+  chat-network:
+    driver: bridge
