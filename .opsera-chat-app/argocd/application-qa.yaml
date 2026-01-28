@@ -19,7 +19,7 @@ spec:
   
   source:
     # Repository URL
-    repoURL: https://github.com/opsera-agentic/chat-app.git
+    repoURL: https://github.com/opsera-agentic/chat-app
     targetRevision: HEAD
     path: .opsera-chat-app/k8s/overlays/qa
     
