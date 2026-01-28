@@ -6,7 +6,6 @@ Provides REST API endpoints with OpenAI ChatGPT integration
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from openai import OpenAI
 from dotenv import load_dotenv
 import os
 
@@ -32,8 +31,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# OpenAI client - lazy initialization to allow app to start without API key
+_openai_client = None
+
+def get_openai_client():
+    """Get or create OpenAI client (lazy initialization)"""
+    global _openai_client
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    if _openai_client is None:
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
 
 
 class ChatRequest(BaseModel):
@@ -81,11 +91,12 @@ async def chat(request: ChatRequest):
     Returns:
         AI response with token usage information
     """
-    # Validate API key
-    if not os.getenv("OPENAI_API_KEY"):
+    # Get OpenAI client (lazy initialization)
+    client = get_openai_client()
+    if client is None:
         raise HTTPException(
-            status_code=401,
-            detail="OpenAI API key not configured"
+            status_code=503,
+            detail="OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
         )
 
     # Validate message
