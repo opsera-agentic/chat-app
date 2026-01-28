@@ -1,0 +1,105 @@
+# Force ArgoCD to refresh cache and sync
+name: "🔄 Force ArgoCD Sync"
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  HUB_CLUSTER: argocd-usw2
+  APP_NAME: chat-app-qa
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  force-sync:
+    name: "🔄 Force Hard Refresh & Sync"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Tools
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Install argocd CLI
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/
+
+      - name: Connect to Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Get ArgoCD Admin Password
+        id: argocd-pass
+        run: |
+          PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+          echo "::add-mask::$PASS"
+          echo "password=$PASS" >> $GITHUB_OUTPUT
+
+      - name: Login to ArgoCD
+        run: |
+          # Get ArgoCD server
+          ARGOCD_SERVER=$(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          if [ -z "$ARGOCD_SERVER" ]; then
+            # Try port-forward if no LoadBalancer
+            kubectl port-forward svc/argocd-server -n argocd 8443:443 &
+            sleep 5
+            ARGOCD_SERVER="localhost:8443"
+          fi
+          
+          argocd login $ARGOCD_SERVER --username admin --password "${{ steps.argocd-pass.outputs.password }}" --insecure || echo "Login via CLI failed, using kubectl"
+
+      - name: Force Hard Refresh
+        run: |
+          echo "## 🔄 Force Sync" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Delete the app and recreate to clear all caches
+          echo "### Step 1: Clear ArgoCD cache" >> $GITHUB_STEP_SUMMARY
+          
+          # Hard refresh annotation
+          kubectl annotate application ${{ env.APP_NAME }} -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          
+          echo "Cache refresh triggered" >> $GITHUB_STEP_SUMMARY
+          sleep 10
+
+      - name: Trigger Sync
+        run: |
+          echo "### Step 2: Trigger Sync" >> $GITHUB_STEP_SUMMARY
+          
+          # Force sync with prune
+          kubectl patch application ${{ env.APP_NAME }} -n argocd \
+            --type merge \
+            -p '{"operation":{"initiatedBy":{"username":"force-sync-workflow"},"sync":{"prune":true,"syncStrategy":{"apply":{"force":true}}}}}'
+          
+          echo "Sync operation triggered" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait and Check Status
+        run: |
+          echo "### Step 3: Waiting for sync..." >> $GITHUB_STEP_SUMMARY
+          sleep 30
+          
+          echo "### Current Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get application ${{ env.APP_NAME }} -n argocd -o jsonpath='{.status.sync.status}' && echo ""
+          kubectl get application ${{ env.APP_NAME }} -n argocd -o jsonpath='{.status.health.status}' && echo ""
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Conditions" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get application ${{ env.APP_NAME }} -n argocd -o jsonpath='{.status.conditions[*].message}' 2>&1 | head -5
+          echo '```' >> $GITHUB_STEP_SUMMARY
