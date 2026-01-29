@@ -17,7 +17,7 @@ spec:
   project: default
 
   source:
-    repoURL: PLACEHOLDER_REPO_URL
+    repoURL: https://github.com/opsera-agentic/chat-app
     targetRevision: main
     path: .opsera-sperigpt-01/k8s/overlays/qa
 

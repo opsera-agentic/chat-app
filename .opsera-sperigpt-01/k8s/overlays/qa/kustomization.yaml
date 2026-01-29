@@ -22,10 +22,10 @@ resources:
 
 images:
   - name: sperigpt-01-frontend
-    newName: PLACEHOLDER_ECR_URI/sperigpt-01-frontend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/sperigpt-01-frontend
     newTag: latest
   - name: sperigpt-01-backend
-    newName: PLACEHOLDER_ECR_URI/sperigpt-01-backend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/sperigpt-01-backend
     newTag: latest
 
 labels:
