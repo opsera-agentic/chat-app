@@ -66,9 +66,9 @@ function App() {
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <MessageSquare className="w-6 h-6 text-indigo-600" />
+            <MessageSquare className="w-6 h-6 text-violet-600" />
             <h1 className="text-xl font-semibold text-gray-900">Chat App</h1>
-            <span className="px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full">v1.0</span>
+            <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded-full">v1.1</span>
           </div>
           <button
             onClick={testBackend}
