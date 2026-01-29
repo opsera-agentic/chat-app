@@ -22,7 +22,7 @@ spec:
     path: .opsera-sperigpt-01/k8s/overlays/dev
 
   destination:
-    server: https://kubernetes.default.svc
+    name: opsera-usw2-np
     namespace: sperigpt-01-dev
 
   syncPolicy:
