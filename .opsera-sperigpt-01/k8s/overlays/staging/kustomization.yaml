@@ -1,0 +1,34 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  KUSTOMIZE STAGING OVERLAY - Blue-Green Deployment Strategy                   ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sperigpt-01-staging
+
+resources:
+  - namespace.yaml
+  - frontend-service.yaml
+  - backend-service.yaml
+  - frontend-rollout.yaml
+  - backend-rollout.yaml
+  - frontend-preview-service.yaml
+  - backend-preview-service.yaml
+  - ingress.yaml
+  - preview-ingress.yaml
+  - configmap.yaml
+
+images:
+  - name: sperigpt-01-frontend
+    newName: PLACEHOLDER_ECR_URI/sperigpt-01-frontend
+    newTag: latest
+  - name: sperigpt-01-backend
+    newName: PLACEHOLDER_ECR_URI/sperigpt-01-backend
+    newTag: latest
+
+labels:
+  - pairs:
+      environment: staging
+    includeSelectors: false

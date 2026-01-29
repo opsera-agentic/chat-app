@@ -1,0 +1,12 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  NAMESPACE - DEV Environment                                                  ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sperigpt-01-dev
+  labels:
+    environment: dev
+    app.kubernetes.io/part-of: sperigpt-01

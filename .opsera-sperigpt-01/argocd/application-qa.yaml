@@ -1,0 +1,42 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ARGOCD APPLICATION - QA Environment                                          ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sperigpt-01-qa
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: sperigpt-01
+    environment: qa
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: PLACEHOLDER_REPO_URL
+    targetRevision: main
+    path: .opsera-sperigpt-01/k8s/overlays/qa
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sperigpt-01-qa
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

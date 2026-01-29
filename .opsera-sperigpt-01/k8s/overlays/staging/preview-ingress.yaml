@@ -1,0 +1,46 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  PREVIEW INGRESS - Staging Blue-Green Preview URL                             ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sperigpt-01-preview-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - preview.opsera-sperigpt-01-staging.agent.opsera.dev
+      secretName: sperigpt-01-staging-preview-tls
+  rules:
+    - host: preview.opsera-sperigpt-01-staging.agent.opsera.dev
+      http:
+        paths:
+          - path: /()(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend-preview
+                port:
+                  number: 80
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: backend-preview
+                port:
+                  number: 8000
+          - path: /health(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: backend-preview
+                port:
+                  number: 8000

@@ -1,0 +1,34 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  KUSTOMIZE QA OVERLAY - Canary Deployment Strategy                            ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sperigpt-01-qa
+
+resources:
+  - namespace.yaml
+  - frontend-service.yaml
+  - backend-service.yaml
+  - frontend-rollout.yaml
+  - backend-rollout.yaml
+  - frontend-canary-service.yaml
+  - backend-canary-service.yaml
+  - ingress.yaml
+  - configmap.yaml
+  - analysis-template.yaml
+
+images:
+  - name: sperigpt-01-frontend
+    newName: PLACEHOLDER_ECR_URI/sperigpt-01-frontend
+    newTag: latest
+  - name: sperigpt-01-backend
+    newName: PLACEHOLDER_ECR_URI/sperigpt-01-backend
+    newTag: latest
+
+labels:
+  - pairs:
+      environment: qa
+    includeSelectors: false

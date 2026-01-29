@@ -1,0 +1,15 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  CONFIGMAP - Application Configuration                                        ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sperigpt-01-config
+  labels:
+    app: sperigpt-01
+data:
+  ENVIRONMENT: "development"
+  CORS_ORIGINS: "*"
+  LOG_LEVEL: "INFO"

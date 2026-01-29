@@ -1,0 +1,79 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  BACKEND ROLLOUT - Canary Deployment (10% → 30% → 60% → 100%)                 ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: backend-rollout
+  labels:
+    app: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: sperigpt-01-backend:latest
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: sperigpt-01-config
+                  key: ENVIRONMENT
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: sperigpt-01-config
+                  key: CORS_ORIGINS
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: {duration: 2m}
+        - setWeight: 30
+        - pause: {duration: 2m}
+        - setWeight: 60
+        - pause: {duration: 2m}
+        - setWeight: 100
+      analysis:
+        templates:
+          - templateName: http-health-check
+        startingStep: 1
+        args:
+          - name: service-name
+            value: backend-canary
+          - name: namespace
+            value: sperigpt-01-qa
+      canaryService: backend-canary
+      stableService: backend

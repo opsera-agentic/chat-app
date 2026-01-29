@@ -1,0 +1,16 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  CONFIGMAP - Staging Environment                                              ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sperigpt-01-config
+  labels:
+    app: sperigpt-01
+    environment: staging
+data:
+  ENVIRONMENT: "staging"
+  CORS_ORIGINS: "https://opsera-sperigpt-01-staging.agent.opsera.dev,https://preview.opsera-sperigpt-01-staging.agent.opsera.dev"
+  LOG_LEVEL: "INFO"
