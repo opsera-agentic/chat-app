@@ -113,7 +113,8 @@ function App() {
           <div className="flex items-center gap-3">
             <MessageSquare className="w-6 h-6 text-violet-600" />
             <h1 className="text-xl font-semibold text-gray-900">Chat App</h1>
-            <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded-full">v1.2</span>
+            <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded-full">v1.3</span>
+            <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full">Enterprise</span>
           </div>
           <button
             onClick={testBackend}
