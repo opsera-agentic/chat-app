@@ -20,10 +20,9 @@ on:
       - 'frontend/**'
       - 'backend/**'
       - '.opsera-sperigpt-01/Dockerfile.*'
-  workflow_run:
-    workflows: ["🔒 sperigpt-01: 10 Quality & Security Gates"]
-    types: [completed]
-    branches: [main]
+  # NOTE: Quality Gates (10-ci-test-scan) runs in PARALLEL on push
+  # Both workflows trigger on same paths - no chaining needed
+  # Quality gate results are informational - build proceeds independently
   workflow_dispatch:
     inputs:
       environment:
@@ -56,40 +55,12 @@ permissions:
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════
-  # CHECK QUALITY GATES (when triggered by workflow_run)
-  # ════════════════════════════════════════════════════════════════════════════
-  check-quality-gates:
-    name: "🚦 Check Quality Gates"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_run'
-    outputs:
-      proceed: ${{ steps.check.outputs.proceed }}
-
-    steps:
-      - name: Verify Quality Gates Passed
-        id: check
-        run: |
-          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
-            echo "proceed=true" >> $GITHUB_OUTPUT
-            echo "### ✅ Quality Gates Passed" >> $GITHUB_STEP_SUMMARY
-            echo "Build authorized to proceed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "proceed=false" >> $GITHUB_OUTPUT
-            echo "### ❌ Quality Gates Failed" >> $GITHUB_STEP_SUMMARY
-            echo "Build blocked - fix quality issues first" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-
-  # ════════════════════════════════════════════════════════════════════════════
   # VERIFY BOOTSTRAP
+  # NOTE: Quality Gates (10-ci-test-scan) runs in PARALLEL - see summary for results
   # ════════════════════════════════════════════════════════════════════════════
   verify-bootstrap:
     name: "🔍 Verify Bootstrap"
     runs-on: ubuntu-latest
-    needs: [check-quality-gates]
-    if: |
-      always() &&
-      (github.event_name != 'workflow_run' || needs.check-quality-gates.outputs.proceed == 'true')
     outputs:
       ecr_uri: ${{ steps.ecr.outputs.ecr_uri }}
       image_tag: ${{ steps.tag.outputs.image_tag }}
@@ -492,7 +463,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Quality Gates | ${{ needs.check-quality-gates.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Gates | (parallel workflow) |" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy to ${ENVIRONMENT} | ${{ needs.sync-and-wait.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Jira Tracking | ${{ needs.jira-tracking.result }} |" >> $GITHUB_STEP_SUMMARY
 
