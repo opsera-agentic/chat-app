@@ -1,6 +1,8 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  CI BUILD & PUSH - Build Docker images and push to ECR for sperigpt-01       ║
-# ║  Code-to-Cloud v0.6 - Powered by Opsera                                       ║
+# ║  CI BUILD & PUSH - Build Docker images and deploy with auto-promotion        ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ║                                                                               ║
+# ║  PROMOTION CHAIN: DEV → QA (Canary) → Staging (Blue-Green)                   ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: "🔨 sperigpt-01: 20 CI Build & Push"
@@ -22,7 +24,16 @@ on:
           - dev
           - qa
           - staging
-        default: 'qa'
+        default: 'dev'
+      auto_promote:
+        description: 'Auto-promote to next environment on success'
+        required: false
+        type: boolean
+        default: true
+      image_tag:
+        description: 'Use existing image tag (skip build)'
+        required: false
+        type: string
 
 env:
   AWS_REGION: us-west-2
@@ -31,6 +42,7 @@ env:
 permissions:
   contents: write
   id-token: write
+  actions: write
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════
@@ -42,6 +54,9 @@ jobs:
     outputs:
       ecr_uri: ${{ steps.ecr.outputs.ecr_uri }}
       image_tag: ${{ steps.tag.outputs.image_tag }}
+      environment: ${{ steps.env.outputs.environment }}
+      next_environment: ${{ steps.env.outputs.next_environment }}
+      auto_promote: ${{ steps.env.outputs.auto_promote }}
 
     steps:
       - name: Configure AWS Credentials
@@ -50,6 +65,36 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Determine Environment
+        id: env
+        run: |
+          # On push, start with DEV; on workflow_dispatch, use input
+          if [ "${{ github.event_name }}" = "push" ]; then
+            ENVIRONMENT="dev"
+            AUTO_PROMOTE="true"
+          else
+            ENVIRONMENT="${{ inputs.environment }}"
+            AUTO_PROMOTE="${{ inputs.auto_promote }}"
+          fi
+
+          # Determine next environment in chain
+          case "$ENVIRONMENT" in
+            dev) NEXT_ENV="qa" ;;
+            qa) NEXT_ENV="staging" ;;
+            staging) NEXT_ENV="" ;;
+          esac
+
+          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+          echo "next_environment=${NEXT_ENV}" >> $GITHUB_OUTPUT
+          echo "auto_promote=${AUTO_PROMOTE}" >> $GITHUB_OUTPUT
+
+          echo "### 🎯 Deployment Target" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${ENVIRONMENT}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Next Environment | \`${NEXT_ENV:-none}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Auto-Promote | \`${AUTO_PROMOTE}\` |" >> $GITHUB_STEP_SUMMARY
 
       - name: Verify ECR Repositories Exist
         id: ecr
@@ -66,20 +111,27 @@ jobs:
           done
           echo "✅ All ECR repositories exist"
 
-      - name: Generate Image Tag
+      - name: Generate or Use Existing Image Tag
         id: tag
         run: |
-          IMAGE_TAG="${GITHUB_SHA:0:7}-$(date +%Y%m%d%H%M%S)"
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            echo "Using existing image tag: ${IMAGE_TAG}"
+          else
+            IMAGE_TAG="${GITHUB_SHA:0:7}-$(date +%Y%m%d%H%M%S)"
+            echo "Generated new image tag: ${IMAGE_TAG}"
+          fi
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "### 🏷️ Image Tag: \`${IMAGE_TAG}\`" >> $GITHUB_STEP_SUMMARY
 
   # ════════════════════════════════════════════════════════════════════════════
-  # BUILD FRONTEND
+  # BUILD FRONTEND (skip if using existing tag)
   # ════════════════════════════════════════════════════════════════════════════
   build-frontend:
     name: "🔨 Build Frontend"
     runs-on: ubuntu-latest
     needs: [verify-bootstrap]
+    if: inputs.image_tag == ''
 
     steps:
       - name: Checkout Code
@@ -114,12 +166,13 @@ jobs:
           echo "\`${FULL_IMAGE}\`" >> $GITHUB_STEP_SUMMARY
 
   # ════════════════════════════════════════════════════════════════════════════
-  # BUILD BACKEND
+  # BUILD BACKEND (skip if using existing tag)
   # ════════════════════════════════════════════════════════════════════════════
   build-backend:
     name: "🔨 Build Backend"
     runs-on: ubuntu-latest
     needs: [verify-bootstrap]
+    if: inputs.image_tag == ''
 
     steps:
       - name: Checkout Code
@@ -157,9 +210,10 @@ jobs:
   # UPDATE MANIFESTS
   # ════════════════════════════════════════════════════════════════════════════
   update-manifests:
-    name: "📝 Update Manifests (${{ inputs.environment || 'qa' }})"
+    name: "📝 Update Manifests (${{ needs.verify-bootstrap.outputs.environment }})"
     runs-on: ubuntu-latest
     needs: [verify-bootstrap, build-frontend, build-backend]
+    if: always() && needs.verify-bootstrap.result == 'success' && (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') && (needs.build-backend.result == 'success' || needs.build-backend.result == 'skipped')
 
     steps:
       - name: Checkout Code
@@ -170,45 +224,45 @@ jobs:
       - name: Update Kustomization with New Image Tag
         env:
           IMAGE_TAG: ${{ needs.verify-bootstrap.outputs.image_tag }}
-          ENVIRONMENT: ${{ inputs.environment || 'qa' }}
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
         run: |
           KUSTOMIZE_FILE=".opsera-${{ env.APP_NAME }}/k8s/overlays/${ENVIRONMENT}/kustomization.yaml"
 
-          # RULE 8: Pull before modify
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
 
-          # Update all image tags
           sed -i "s|newTag:.*|newTag: ${IMAGE_TAG}|g" "$KUSTOMIZE_FILE"
 
           echo "✅ Updated kustomization.yaml with tag: ${IMAGE_TAG}"
 
       - name: Commit and Push Changes
         env:
-          ENVIRONMENT: ${{ inputs.environment || 'qa' }}
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
         run: |
           git add .
           git diff --staged --quiet || git commit -m "chore(${ENVIRONMENT}): update images to ${{ needs.verify-bootstrap.outputs.image_tag }} [skip ci]"
           git push origin main || echo "No changes to push"
 
       - name: Summary
+        env:
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
         run: |
-          echo "### 📝 Manifests Updated" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Manifests Updated for ${ENVIRONMENT}" >> $GITHUB_STEP_SUMMARY
           echo "| Service | Image Tag |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-----------|" >> $GITHUB_STEP_SUMMARY
           echo "| Frontend | \`${{ needs.verify-bootstrap.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Backend | \`${{ needs.verify-bootstrap.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ArgoCD will automatically sync the new images." >> $GITHUB_STEP_SUMMARY
 
   # ════════════════════════════════════════════════════════════════════════════
-  # TRIGGER ARGOCD SYNC
+  # SYNC ARGOCD & WAIT FOR DEPLOYMENT
   # ════════════════════════════════════════════════════════════════════════════
-  sync-argocd:
-    name: "🔄 Sync ArgoCD"
+  sync-and-wait:
+    name: "🔄 Deploy to ${{ needs.verify-bootstrap.outputs.environment }}"
     runs-on: ubuntu-latest
     needs: [verify-bootstrap, update-manifests]
+    outputs:
+      deploy_success: ${{ steps.wait.outputs.success }}
 
     steps:
       - name: Configure AWS Credentials
@@ -218,22 +272,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install kubectl
+      - name: Install kubectl and Argo Rollouts
         run: |
           curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
       - name: Sync ArgoCD Application
         env:
-          ENVIRONMENT: ${{ inputs.environment || 'qa' }}
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
         run: |
           HUB_CLUSTER="argocd-usw2"
           aws eks update-kubeconfig --name $HUB_CLUSTER --region ${{ env.AWS_REGION }}
 
           APP_NAME="${{ env.APP_NAME }}-${ENVIRONMENT}"
 
-          # Hard refresh and sync
           kubectl patch application "$APP_NAME" -n argocd \
             --type merge -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
 
@@ -244,4 +301,119 @@ jobs:
 
           echo "### 🔄 ArgoCD Sync Triggered" >> $GITHUB_STEP_SUMMARY
           echo "- Application: \`$APP_NAME\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Environment: \`${ENVIRONMENT}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for Deployment
+        id: wait
+        env:
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
+        run: |
+          SPOKE_CLUSTER="opsera-usw2-np"
+          aws eks update-kubeconfig --name $SPOKE_CLUSTER --region ${{ env.AWS_REGION }}
+
+          NAMESPACE="${{ env.APP_NAME }}-${ENVIRONMENT}"
+
+          echo "⏳ Waiting for deployment to complete in ${NAMESPACE}..."
+
+          # Wait for pods to be ready (max 5 minutes)
+          TIMEOUT=300
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Check if pods are running
+            READY_PODS=$(kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].status.phase}' 2>/dev/null | tr ' ' '\n' | grep -c "Running" || echo "0")
+            TOTAL_PODS=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l || echo "0")
+
+            if [ "$TOTAL_PODS" -gt 0 ] && [ "$READY_PODS" -eq "$TOTAL_PODS" ]; then
+              echo "✅ All $READY_PODS pods are running!"
+              echo "success=true" >> $GITHUB_OUTPUT
+
+              # For QA/Staging with rollouts, check rollout status
+              if [ "$ENVIRONMENT" != "dev" ]; then
+                echo "Checking rollout status..."
+                kubectl argo rollouts status backend-rollout -n $NAMESPACE --timeout=180s || true
+              fi
+
+              echo "### ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+              echo "- Environment: \`${ENVIRONMENT}\`" >> $GITHUB_STEP_SUMMARY
+              echo "- Pods Running: \`${READY_PODS}\`" >> $GITHUB_STEP_SUMMARY
+              exit 0
+            fi
+
+            echo "Waiting... ($READY_PODS/$TOTAL_PODS pods ready, ${ELAPSED}s elapsed)"
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "⚠️ Deployment timed out after ${TIMEOUT}s"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "### ⚠️ Deployment Timeout" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # AUTO-PROMOTE TO NEXT ENVIRONMENT
+  # ════════════════════════════════════════════════════════════════════════════
+  auto-promote:
+    name: "🚀 Promote to ${{ needs.verify-bootstrap.outputs.next_environment }}"
+    runs-on: ubuntu-latest
+    needs: [verify-bootstrap, sync-and-wait]
+    if: |
+      needs.sync-and-wait.outputs.deploy_success == 'true' &&
+      needs.verify-bootstrap.outputs.auto_promote == 'true' &&
+      needs.verify-bootstrap.outputs.next_environment != ''
+
+    steps:
+      - name: Trigger Next Environment Deployment
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEXT_ENV: ${{ needs.verify-bootstrap.outputs.next_environment }}
+          IMAGE_TAG: ${{ needs.verify-bootstrap.outputs.image_tag }}
+        run: |
+          echo "### 🚀 Auto-Promoting to ${NEXT_ENV}" >> $GITHUB_STEP_SUMMARY
+          echo "- Image Tag: \`${IMAGE_TAG}\`" >> $GITHUB_STEP_SUMMARY
+
+          gh workflow run "sperigpt-01-20-ci-build-push.yaml" \
+            --repo ${{ github.repository }} \
+            -f environment=${NEXT_ENV} \
+            -f auto_promote=true \
+            -f image_tag=${IMAGE_TAG}
+
+          echo "✅ Promotion triggered successfully" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # FINAL SUMMARY
+  # ════════════════════════════════════════════════════════════════════════════
+  summary:
+    name: "📋 Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [verify-bootstrap, sync-and-wait, auto-promote]
+    if: always()
+
+    steps:
+      - name: Generate Summary
+        env:
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
+          NEXT_ENV: ${{ needs.verify-bootstrap.outputs.next_environment }}
+          DEPLOY_SUCCESS: ${{ needs.sync-and-wait.outputs.deploy_success }}
+          AUTO_PROMOTE: ${{ needs.verify-bootstrap.outputs.auto_promote }}
+        run: |
+          echo "## 📋 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Promotion Chain" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "DEV ──► QA (Canary) ──► Staging (Blue-Green)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy to ${ENVIRONMENT} | ${{ needs.sync-and-wait.result }} |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${AUTO_PROMOTE}" = "true" ] && [ -n "${NEXT_ENV}" ]; then
+            echo "| Promote to ${NEXT_ENV} | ${{ needs.auto-promote.result }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Endpoints" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| DEV | https://opsera-sperigpt-01-dev.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| QA | https://opsera-sperigpt-01-qa.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | https://opsera-sperigpt-01-staging.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
