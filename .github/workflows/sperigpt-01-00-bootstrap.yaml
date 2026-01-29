@@ -228,17 +228,22 @@ jobs:
         run: |
           aws eks update-kubeconfig --name ${{ needs.discover.outputs.hub_cluster }} --region ${{ env.AWS_REGION }}
 
-          # Create ArgoCD repo secret if not exists
-          kubectl get secret repo-${{ github.repository_owner }}-${{ env.APP_NAME }} -n argocd 2>/dev/null || \
-          kubectl create secret generic repo-${{ github.repository_owner }}-${{ env.APP_NAME }} \
-            -n argocd \
-            --from-literal=url=$(git remote get-url origin) \
-            --from-literal=password=${{ secrets.GH_PAT }} \
-            --from-literal=username=git \
-            --from-literal=type=git
-
-          kubectl label secret repo-${{ github.repository_owner }}-${{ env.APP_NAME }} \
-            -n argocd argocd.argoproj.io/secret-type=repository --overwrite
+          # Create/update ArgoCD repo secret (idempotent with kubectl apply)
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: repo-${{ github.repository_owner }}-${{ env.APP_NAME }}
+            namespace: argocd
+            labels:
+              argocd.argoproj.io/secret-type: repository
+          type: Opaque
+          stringData:
+            url: $(git remote get-url origin)
+            password: ${{ secrets.GH_PAT }}
+            username: git
+            type: git
+          EOF
 
           # Apply ArgoCD Application
           kubectl apply -f .opsera-${{ env.APP_NAME }}/argocd/application-${{ matrix.environment }}.yaml
