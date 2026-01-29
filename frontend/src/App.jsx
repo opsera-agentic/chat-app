@@ -1,10 +1,55 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Loader2, CheckCircle, AlertCircle, MessageSquare } from 'lucide-react'
+import { Send, Loader2, CheckCircle, AlertCircle, MessageSquare, Clock } from 'lucide-react'
 import { cn } from './lib/utils'
 
 const API_URL = 'http://localhost:8000'
+
+// World Clock Configuration
+const WORLD_CLOCKS = [
+  { city: 'San Jose', timezone: 'America/Los_Angeles', flag: '🌉' },
+  { city: 'Dallas', timezone: 'America/Chicago', flag: '🤠' },
+  { city: 'New York', timezone: 'America/New_York', flag: '🗽' },
+  { city: 'Hyderabad', timezone: 'Asia/Kolkata', flag: '🇮🇳' },
+]
+
+function WorldClock() {
+  const [times, setTimes] = useState({})
+
+  useEffect(() => {
+    const updateTimes = () => {
+      const newTimes = {}
+      WORLD_CLOCKS.forEach(({ city, timezone }) => {
+        newTimes[city] = new Date().toLocaleTimeString('en-US', {
+          timeZone: timezone,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        })
+      })
+      setTimes(newTimes)
+    }
+
+    updateTimes()
+    const interval = setInterval(updateTimes, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="flex items-center gap-4 text-xs">
+      <Clock className="w-4 h-4 text-violet-500" />
+      {WORLD_CLOCKS.map(({ city, flag }) => (
+        <div key={city} className="flex items-center gap-1">
+          <span>{flag}</span>
+          <span className="font-medium text-gray-600">{city}:</span>
+          <span className="font-mono text-gray-800">{times[city] || '--:--:--'}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function App() {
   const [message, setMessage] = useState('')
@@ -68,7 +113,7 @@ function App() {
           <div className="flex items-center gap-3">
             <MessageSquare className="w-6 h-6 text-violet-600" />
             <h1 className="text-xl font-semibold text-gray-900">Chat App</h1>
-            <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded-full">v1.1</span>
+            <span className="px-2 py-0.5 text-xs font-medium bg-violet-100 text-violet-700 rounded-full">v1.2</span>
           </div>
           <button
             onClick={testBackend}
@@ -86,6 +131,12 @@ function App() {
             {testStatus === 'error' && <AlertCircle className="w-4 h-4 inline mr-2" />}
             {testStatus === 'success' ? 'Connected!' : testStatus === 'error' ? 'Failed' : 'Test Backend'}
           </button>
+        </div>
+        {/* World Clock Bar */}
+        <div className="bg-gradient-to-r from-violet-50 to-indigo-50 border-t border-violet-100">
+          <div className="max-w-4xl mx-auto px-4 py-2 flex justify-center">
+            <WorldClock />
+          </div>
         </div>
       </header>
 
