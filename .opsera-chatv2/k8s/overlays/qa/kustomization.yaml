@@ -27,11 +27,11 @@ resources:
 
 images:
   - name: chatv2-frontend
-    newName: PLACEHOLDER_ECR_URI/chatv2-frontend
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chatv2-frontend
+    newTag: 84dcaba-20260129065330
   - name: chatv2-backend
-    newName: PLACEHOLDER_ECR_URI/chatv2-backend
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/chatv2-backend
+    newTag: 84dcaba-20260129065330
 
 labels:
   - pairs:
