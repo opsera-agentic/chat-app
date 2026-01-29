@@ -261,6 +261,7 @@ jobs:
     name: "🔄 Deploy to ${{ needs.verify-bootstrap.outputs.environment }}"
     runs-on: ubuntu-latest
     needs: [verify-bootstrap, update-manifests]
+    if: always() && needs.update-manifests.result == 'success'
     outputs:
       deploy_success: ${{ steps.wait.outputs.success }}
 
@@ -356,6 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [verify-bootstrap, sync-and-wait]
     if: |
+      always() &&
       needs.sync-and-wait.outputs.deploy_success == 'true' &&
       needs.verify-bootstrap.outputs.auto_promote == 'true' &&
       needs.verify-bootstrap.outputs.next_environment != ''
