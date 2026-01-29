@@ -23,10 +23,10 @@ resources:
 images:
   - name: sperigpt-01-frontend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/sperigpt-01-frontend
-    newTag: d1ffc0d-20260129121937
+    newTag: ea11a24-20260129125607
   - name: sperigpt-01-backend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/sperigpt-01-backend
-    newTag: d1ffc0d-20260129121937
+    newTag: ea11a24-20260129125607
 
 labels:
   - pairs:
