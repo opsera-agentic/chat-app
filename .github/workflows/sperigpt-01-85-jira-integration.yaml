@@ -91,10 +91,12 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
         run: |
-          # Check if Jira is configured
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          # Check if Jira is configured (need both TOKEN and EMAIL)
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Set JIRA_API_TOKEN, JIRA_EMAIL, JIRA_BASE_URL secrets to enable" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             echo "ticket_key=MOCK-$(date +%s)" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -153,10 +155,12 @@ jobs:
           IMAGE_TAG="${{ inputs.image_tag || github.sha }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 
-          # Check if Jira is configured
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          # Check if Jira is configured (need both TOKEN and EMAIL)
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Using mock ticket for demonstration" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             TICKET_KEY="MOCK-$(date +%s)"
             echo "ticket_key=${TICKET_KEY}" >> $GITHUB_OUTPUT
 
@@ -239,9 +243,11 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Would update ticket: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
@@ -280,9 +286,11 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Would transition ticket: ${TICKET_KEY} to ${{ inputs.transition_name }}" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
@@ -310,7 +318,7 @@ jobs:
           TICKET_KEY: ${{ inputs.ticket_key }}
           TRANSITION_ID: ${{ steps.transitions.outputs.transition_id }}
         run: |
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             exit 0
           fi
 
@@ -351,10 +359,12 @@ jobs:
             COMMENT="Deployment update from GitHub Actions"
           fi
 
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Would add comment to: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
             echo "Comment: ${COMMENT}" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
 
@@ -404,9 +414,11 @@ jobs:
           # Get recent commits
           COMMITS=$(git log --oneline -10)
 
-          if [ -z "$JIRA_API_TOKEN" ]; then
+          if [ -z "$JIRA_API_TOKEN" ] || [ -z "$JIRA_EMAIL" ]; then
             echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
             echo "Would link commits to: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_API_TOKEN" ] && echo "- Missing: JIRA_API_TOKEN" >> $GITHUB_STEP_SUMMARY
+            [ -z "$JIRA_EMAIL" ] && echo "- Missing: JIRA_EMAIL" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "$COMMITS" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
