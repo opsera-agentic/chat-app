@@ -315,8 +315,13 @@ jobs:
 
           echo "⏳ Waiting for deployment to complete in ${NAMESPACE}..."
 
-          # Wait for pods to be ready (max 5 minutes)
-          TIMEOUT=300
+          # RULE 43: Environment-aware timeouts
+          # DEV = 5 min (direct deploy), QA/Staging = 10 min (canary/blue-green)
+          case "$ENVIRONMENT" in
+            dev) TIMEOUT=300 ;;
+            qa|staging) TIMEOUT=600 ;;
+            *) TIMEOUT=300 ;;
+          esac
           ELAPSED=0
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
