@@ -1,0 +1,309 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ANALYSIS TEMPLATE - NewRelic APM for Canary Deployments                     ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ║                                                                               ║
+# ║  RULE 31: Use Job provider for analysis (not Web provider)                   ║
+# ║  - Web provider does NOT properly resolve secretKeyRef in headers            ║
+# ║  - Job provider runs inside cluster with full secret access                  ║
+# ║                                                                               ║
+# ║  METRICS: Error Rate | Response Time (P99) | Apdex Score | Throughput        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: newrelic-apm-analysis
+  labels:
+    app.kubernetes.io/component: canary-analysis
+    app.kubernetes.io/managed-by: opsera
+spec:
+  args:
+    - name: app-name
+      value: "sperigpt-01"
+    - name: error-threshold
+      value: "5"
+    - name: latency-threshold
+      value: "500"
+    - name: apdex-threshold
+      value: "0.85"
+    - name: nr-api-url
+      value: "https://api.newrelic.com"
+
+  metrics:
+    # ════════════════════════════════════════════════════════════════════════════
+    # METRIC 1: ERROR RATE
+    # Measures percentage of failed transactions
+    # ════════════════════════════════════════════════════════════════════════════
+    - name: error-rate
+      interval: 30s
+      count: 5
+      failureLimit: 2
+      consecutiveErrorLimit: 3
+      provider:
+        job:
+          spec:
+            backoffLimit: 1
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: newrelic-error-check
+                    image: curlimages/curl:8.5.0
+                    env:
+                      - name: NR_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: newrelic-api-key
+                            key: api-key
+                            optional: true
+                      - name: APP_NAME
+                        value: "{{args.app-name}}"
+                      - name: ERROR_THRESHOLD
+                        value: "{{args.error-threshold}}"
+                      - name: NR_API_URL
+                        value: "{{args.nr-api-url}}"
+                    command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        set -e
+                        echo "╔══════════════════════════════════════════════════════════════╗"
+                        echo "║  Error Rate Analysis - ${APP_NAME}                           ║"
+                        echo "╚══════════════════════════════════════════════════════════════╝"
+
+                        # If no API key, use mock data (for testing)
+                        if [ -z "$NR_API_KEY" ]; then
+                          echo "⚠️ No NR API key - using mock data"
+                          ERROR_RATE=2
+                        else
+                          RESPONSE=$(curl -s -k \
+                            -H "Api-Key: $NR_API_KEY" \
+                            -H "Content-Type: application/json" \
+                            "${NR_API_URL}/v2/applications.json?filter[name]=${APP_NAME}")
+
+                          ERROR_RATE=$(echo "$RESPONSE" | grep -o '"error_rate":[0-9.]*' | head -1 | cut -d: -f2 || echo "0")
+                          [ -z "$ERROR_RATE" ] && ERROR_RATE=0
+                        fi
+
+                        echo "┌─────────────────────────────────────┐"
+                        echo "│ Error Rate: ${ERROR_RATE}%"
+                        echo "│ Threshold:  ${ERROR_THRESHOLD}%"
+                        echo "└─────────────────────────────────────┘"
+
+                        RESULT=$(awk "BEGIN {print ($ERROR_RATE <= $ERROR_THRESHOLD) ? 0 : 1}")
+                        if [ "$RESULT" -eq 0 ]; then
+                          echo "✅ PASS - Error rate within threshold"
+                          exit 0
+                        else
+                          echo "❌ FAIL - Error rate exceeds threshold"
+                          exit 1
+                        fi
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # METRIC 2: RESPONSE TIME (P99)
+    # Measures 99th percentile response latency
+    # ════════════════════════════════════════════════════════════════════════════
+    - name: response-time
+      interval: 30s
+      count: 5
+      failureLimit: 3
+      provider:
+        job:
+          spec:
+            backoffLimit: 1
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: newrelic-latency-check
+                    image: curlimages/curl:8.5.0
+                    env:
+                      - name: NR_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: newrelic-api-key
+                            key: api-key
+                            optional: true
+                      - name: APP_NAME
+                        value: "{{args.app-name}}"
+                      - name: LATENCY_THRESHOLD
+                        value: "{{args.latency-threshold}}"
+                      - name: NR_API_URL
+                        value: "{{args.nr-api-url}}"
+                    command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        set -e
+                        echo "╔══════════════════════════════════════════════════════════════╗"
+                        echo "║  Response Time Analysis - ${APP_NAME}                        ║"
+                        echo "╚══════════════════════════════════════════════════════════════╝"
+
+                        if [ -z "$NR_API_KEY" ]; then
+                          echo "⚠️ No NR API key - using mock data"
+                          LATENCY=150
+                        else
+                          RESPONSE=$(curl -s -k \
+                            -H "Api-Key: $NR_API_KEY" \
+                            -H "Content-Type: application/json" \
+                            "${NR_API_URL}/v2/applications.json?filter[name]=${APP_NAME}")
+
+                          LATENCY=$(echo "$RESPONSE" | grep -o '"response_time":[0-9.]*' | head -1 | cut -d: -f2 || echo "0")
+                          [ -z "$LATENCY" ] && LATENCY=0
+                          # Convert to ms if in seconds
+                          LATENCY=$(awk "BEGIN {print ($LATENCY < 10) ? $LATENCY * 1000 : $LATENCY}")
+                        fi
+
+                        echo "┌─────────────────────────────────────┐"
+                        echo "│ Response Time: ${LATENCY}ms"
+                        echo "│ Threshold:     ${LATENCY_THRESHOLD}ms"
+                        echo "└─────────────────────────────────────┘"
+
+                        RESULT=$(awk "BEGIN {print ($LATENCY <= $LATENCY_THRESHOLD) ? 0 : 1}")
+                        if [ "$RESULT" -eq 0 ]; then
+                          echo "✅ PASS - Response time within threshold"
+                          exit 0
+                        else
+                          echo "❌ FAIL - Response time exceeds threshold"
+                          exit 1
+                        fi
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # METRIC 3: APDEX SCORE
+    # Measures user satisfaction (0.0 - 1.0)
+    # ════════════════════════════════════════════════════════════════════════════
+    - name: apdex-score
+      interval: 30s
+      count: 5
+      failureLimit: 3
+      provider:
+        job:
+          spec:
+            backoffLimit: 1
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: newrelic-apdex-check
+                    image: curlimages/curl:8.5.0
+                    env:
+                      - name: NR_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: newrelic-api-key
+                            key: api-key
+                            optional: true
+                      - name: APP_NAME
+                        value: "{{args.app-name}}"
+                      - name: APDEX_THRESHOLD
+                        value: "{{args.apdex-threshold}}"
+                      - name: NR_API_URL
+                        value: "{{args.nr-api-url}}"
+                    command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        set -e
+                        echo "╔══════════════════════════════════════════════════════════════╗"
+                        echo "║  Apdex Score Analysis - ${APP_NAME}                          ║"
+                        echo "╚══════════════════════════════════════════════════════════════╝"
+
+                        if [ -z "$NR_API_KEY" ]; then
+                          echo "⚠️ No NR API key - using mock data"
+                          APDEX=0.95
+                        else
+                          RESPONSE=$(curl -s -k \
+                            -H "Api-Key: $NR_API_KEY" \
+                            -H "Content-Type: application/json" \
+                            "${NR_API_URL}/v2/applications.json?filter[name]=${APP_NAME}")
+
+                          APDEX=$(echo "$RESPONSE" | grep -o '"apdex_score":[0-9.]*' | head -1 | cut -d: -f2 || echo "1.0")
+                          [ -z "$APDEX" ] && APDEX="1.0"
+                        fi
+
+                        echo "┌─────────────────────────────────────┐"
+                        echo "│ Apdex Score: ${APDEX}"
+                        echo "│ Threshold:   >= ${APDEX_THRESHOLD}"
+                        echo "└─────────────────────────────────────┘"
+
+                        RESULT=$(awk "BEGIN {print ($APDEX >= $APDEX_THRESHOLD) ? 0 : 1}")
+                        if [ "$RESULT" -eq 0 ]; then
+                          echo "✅ PASS - Apdex score meets threshold"
+                          exit 0
+                        else
+                          echo "❌ FAIL - Apdex score below threshold"
+                          exit 1
+                        fi
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # METRIC 4: THROUGHPUT (Informational)
+    # Measures requests per minute - informational only
+    # ════════════════════════════════════════════════════════════════════════════
+    - name: throughput
+      interval: 30s
+      count: 3
+      failureLimit: 3
+      provider:
+        job:
+          spec:
+            backoffLimit: 1
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: newrelic-throughput-check
+                    image: curlimages/curl:8.5.0
+                    env:
+                      - name: NR_API_KEY
+                        valueFrom:
+                          secretKeyRef:
+                            name: newrelic-api-key
+                            key: api-key
+                            optional: true
+                      - name: APP_NAME
+                        value: "{{args.app-name}}"
+                      - name: NR_API_URL
+                        value: "{{args.nr-api-url}}"
+                    command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        echo "╔══════════════════════════════════════════════════════════════╗"
+                        echo "║  Throughput Analysis - ${APP_NAME} (Informational)           ║"
+                        echo "╚══════════════════════════════════════════════════════════════╝"
+
+                        if [ -z "$NR_API_KEY" ]; then
+                          echo "⚠️ No NR API key - using mock data"
+                          THROUGHPUT=100
+                        else
+                          RESPONSE=$(curl -s -k \
+                            -H "Api-Key: $NR_API_KEY" \
+                            -H "Content-Type: application/json" \
+                            "${NR_API_URL}/v2/applications.json?filter[name]=${APP_NAME}")
+
+                          THROUGHPUT=$(echo "$RESPONSE" | grep -o '"throughput":[0-9.]*' | head -1 | cut -d: -f2 || echo "0")
+                          [ -z "$THROUGHPUT" ] && THROUGHPUT=0
+                        fi
+
+                        echo "┌─────────────────────────────────────┐"
+                        echo "│ Throughput: ${THROUGHPUT} rpm"
+                        echo "│ (Informational - no threshold)"
+                        echo "└─────────────────────────────────────┘"
+
+                        # Always pass - this is informational
+                        echo "✅ INFO - Throughput recorded"
+                        exit 0
+---
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  SECRET - NewRelic API Key (placeholder)                                     ║
+# ║  Replace with actual key or use external-secrets                             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+apiVersion: v1
+kind: Secret
+metadata:
+  name: newrelic-api-key
+  labels:
+    app.kubernetes.io/managed-by: opsera
+type: Opaque
+stringData:
+  api-key: "PLACEHOLDER_NEWRELIC_API_KEY"

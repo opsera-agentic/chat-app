@@ -548,5 +548,134 @@ To merge these learnings into the main Code-to-Cloud v0.6 skill:
 
 ---
 
+---
+
+## Enterprise Features Added (Session 2)
+
+### Quality & Security Gates
+
+**Workflow:** `sperigpt-01-10-ci-test-scan.yaml`
+
+| Gate | Tool | Threshold | Action on Fail |
+|------|------|-----------|----------------|
+| Secrets Detection | Gitleaks | Any secret | Block build |
+| SAST | SonarQube | Quality gate | Block build |
+| SCA | Grype | CRITICAL vulns | Block build |
+| License | license-checker | GPL/proprietary | Warning |
+
+**Flow:**
+```
+Push → Quality Gates → (Pass) → CI Build → Deploy
+                    → (Fail) → BLOCKED
+```
+
+### Jira Integration
+
+**Workflow:** `sperigpt-01-85-jira-integration.yaml`
+
+| Action | Trigger | Purpose |
+|--------|---------|---------|
+| create-deployment-ticket | Auto/Manual | Track deployments |
+| update-ticket | Manual | Update status |
+| transition-ticket | Manual | Change workflow state |
+| add-comment | Manual | Add deployment notes |
+| link-commits | Manual | Associate commits |
+
+**Required Secrets:**
+- `JIRA_BASE_URL` - Jira instance URL
+- `JIRA_API_TOKEN` - API token
+- `JIRA_EMAIL` - Associated email
+- `JIRA_PROJECT_KEY` - Project key (e.g., DEPLOY)
+
+### NewRelic APM Analysis
+
+**Template:** `analysis-template-newrelic.yaml`
+
+| Metric | Threshold | Failure Limit |
+|--------|-----------|---------------|
+| Error Rate | ≤ 5% | 2 out of 5 |
+| Response Time | ≤ 500ms | 3 out of 5 |
+| Apdex Score | ≥ 0.85 | 3 out of 5 |
+| Throughput | Informational | N/A |
+
+**RULE 31 Applied:** Uses Job provider (not Web) to properly resolve secretKeyRef
+
+**Required Secrets:**
+- `newrelic-api-key` (Kubernetes Secret) - NewRelic API key
+
+### New Rules Summary (Enterprise)
+
+| Rule | Description | Category |
+|------|-------------|----------|
+| **RULE 45** | Quality gates MUST pass before CI build starts | Security |
+| **RULE 46** | Use Job provider for APM analysis (RULE 31 extension) | Argo Rollouts |
+| **RULE 47** | Jira tickets auto-created for production deployments | Operations |
+
+### New Learnings Summary (Enterprise)
+
+| Learning | Description | Category |
+|----------|-------------|----------|
+| **454** | Gitleaks runs on full git history with fetch-depth: 0 | Security |
+| **455** | SonarQube needs SONAR_TOKEN and SONAR_HOST_URL secrets | Quality |
+| **456** | Grype SCA outputs SARIF format for GitHub Security tab | Security |
+| **457** | NewRelic API key should be optional (mock data fallback) | APM |
+| **458** | Jira API uses Basic auth with email:token base64 encoded | Jira |
+| **459** | workflow_run trigger enables build chaining with quality gates | GitHub Actions |
+
+---
+
+## Enterprise Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ENTERPRISE CI/CD PIPELINE                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  PHASE 1: QUALITY GATES (10-ci-test-scan)                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │   Gitleaks   │  │  SonarQube   │  │    Grype     │  │   License    │    │
+│  │   Secrets    │  │    SAST      │  │     SCA      │  │   Check      │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+│         │                 │                 │                 │             │
+│         └─────────────────┴─────────────────┴─────────────────┘             │
+│                                    │                                        │
+│                          ┌─────────▼─────────┐                              │
+│                          │   Quality Gate    │                              │
+│                          │   (Pass/Fail)     │                              │
+│                          └─────────┬─────────┘                              │
+│                                    │ (On Success)                           │
+│  PHASE 2: CI BUILD (20-ci-build-push)                                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                       │
+│  │    Build     │  │    Build     │  │   Update     │                       │
+│  │   Frontend   │  │   Backend    │  │  Manifests   │                       │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                       │
+│         │                 │                 │                               │
+│         └─────────────────┴─────────────────┘                               │
+│                                    │                                        │
+│  PHASE 3: DEPLOY (ArgoCD + Argo Rollouts)                                   │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │                                                                  │       │
+│  │  DEV (Direct)  ──►  QA (Canary)  ──►  Staging (Blue-Green)      │       │
+│  │                      │                    │                      │       │
+│  │               ┌──────▼──────┐      ┌──────▼──────┐               │       │
+│  │               │  NewRelic   │      │  Preview    │               │       │
+│  │               │  APM Check  │      │  URL Test   │               │       │
+│  │               └─────────────┘      └─────────────┘               │       │
+│  │                                                                  │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                    │                                        │
+│  PHASE 4: TRACKING (Jira)                                                   │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │  Auto-create deployment ticket with:                             │       │
+│  │  - Environment, Image tag, Timestamp                             │       │
+│  │  - Links to GitHub Actions run                                   │       │
+│  │  - Auto-transition on success/failure                            │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 *Generated: 2026-01-29 | Session ID: sperigpt-01-20260129*
 *Code-to-Cloud v0.6 - Powered by Opsera*

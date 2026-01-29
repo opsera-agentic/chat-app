@@ -3,6 +3,12 @@
 # ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
 # ║                                                                               ║
 # ║  PROMOTION CHAIN: DEV → QA (Canary) → Staging (Blue-Green)                   ║
+# ║                                                                               ║
+# ║  ENTERPRISE FEATURES:                                                         ║
+# ║  - Quality Gates: Requires 10-ci-test-scan to pass first                     ║
+# ║  - Security Scanning: Grype SCA, Gitleaks secrets detection                  ║
+# ║  - Jira Integration: Auto-creates deployment tickets                          ║
+# ║  - NewRelic APM: Canary analysis with error rate, latency, apdex             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: "🔨 sperigpt-01: 20 CI Build & Push"
@@ -14,6 +20,10 @@ on:
       - 'frontend/**'
       - 'backend/**'
       - '.opsera-sperigpt-01/Dockerfile.*'
+  workflow_run:
+    workflows: ["🔒 sperigpt-01: 10 Quality & Security Gates"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -46,11 +56,40 @@ permissions:
 
 jobs:
   # ════════════════════════════════════════════════════════════════════════════
+  # CHECK QUALITY GATES (when triggered by workflow_run)
+  # ════════════════════════════════════════════════════════════════════════════
+  check-quality-gates:
+    name: "🚦 Check Quality Gates"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_run'
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+
+    steps:
+      - name: Verify Quality Gates Passed
+        id: check
+        run: |
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "proceed=true" >> $GITHUB_OUTPUT
+            echo "### ✅ Quality Gates Passed" >> $GITHUB_STEP_SUMMARY
+            echo "Build authorized to proceed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "proceed=false" >> $GITHUB_OUTPUT
+            echo "### ❌ Quality Gates Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Build blocked - fix quality issues first" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+  # ════════════════════════════════════════════════════════════════════════════
   # VERIFY BOOTSTRAP
   # ════════════════════════════════════════════════════════════════════════════
   verify-bootstrap:
     name: "🔍 Verify Bootstrap"
     runs-on: ubuntu-latest
+    needs: [check-quality-gates]
+    if: |
+      always() &&
+      (github.event_name != 'workflow_run' || needs.check-quality-gates.outputs.proceed == 'true')
     outputs:
       ecr_uri: ${{ steps.ecr.outputs.ecr_uri }}
       image_tag: ${{ steps.tag.outputs.image_tag }}
@@ -386,12 +425,40 @@ jobs:
           echo "✅ Promotion triggered successfully" >> $GITHUB_STEP_SUMMARY
 
   # ════════════════════════════════════════════════════════════════════════════
+  # JIRA INTEGRATION - Create deployment ticket
+  # ════════════════════════════════════════════════════════════════════════════
+  jira-tracking:
+    name: "📋 Jira Tracking"
+    runs-on: ubuntu-latest
+    needs: [verify-bootstrap, sync-and-wait]
+    if: |
+      always() &&
+      needs.sync-and-wait.outputs.deploy_success == 'true'
+
+    steps:
+      - name: Create Jira Deployment Ticket
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          ENVIRONMENT: ${{ needs.verify-bootstrap.outputs.environment }}
+          IMAGE_TAG: ${{ needs.verify-bootstrap.outputs.image_tag }}
+        run: |
+          # Trigger Jira integration workflow
+          gh workflow run "sperigpt-01-85-jira-integration.yaml" \
+            --repo ${{ github.repository }} \
+            -f action=create-deployment-ticket \
+            -f environment=${ENVIRONMENT} \
+            -f image_tag=${IMAGE_TAG} || echo "Jira workflow not triggered (optional)"
+
+          echo "### 📋 Jira Tracking" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment ticket creation triggered for ${ENVIRONMENT}" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
   # FINAL SUMMARY
   # ════════════════════════════════════════════════════════════════════════════
   summary:
     name: "📋 Pipeline Summary"
     runs-on: ubuntu-latest
-    needs: [verify-bootstrap, sync-and-wait, auto-promote]
+    needs: [verify-bootstrap, sync-and-wait, auto-promote, jira-tracking]
     if: always()
 
     steps:
@@ -404,14 +471,30 @@ jobs:
         run: |
           echo "## 📋 Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Enterprise Pipeline Architecture" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "┌────────────────┐    ┌────────────────┐    ┌────────────────┐" >> $GITHUB_STEP_SUMMARY
+          echo "│  Quality Gates │───►│   CI Build     │───►│   Deploy       │" >> $GITHUB_STEP_SUMMARY
+          echo "│  (SAST/SCA)    │    │   (Docker)     │    │   (ArgoCD)     │" >> $GITHUB_STEP_SUMMARY
+          echo "└────────────────┘    └────────────────┘    └────────────────┘" >> $GITHUB_STEP_SUMMARY
+          echo "        │                                           │" >> $GITHUB_STEP_SUMMARY
+          echo "        ▼                                           ▼" >> $GITHUB_STEP_SUMMARY
+          echo "┌────────────────┐                          ┌────────────────┐" >> $GITHUB_STEP_SUMMARY
+          echo "│  Jira Ticket   │                          │  APM Analysis  │" >> $GITHUB_STEP_SUMMARY
+          echo "│  (Tracking)    │                          │  (NewRelic)    │" >> $GITHUB_STEP_SUMMARY
+          echo "└────────────────┘                          └────────────────┘" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Promotion Chain" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "DEV ──► QA (Canary) ──► Staging (Blue-Green)" >> $GITHUB_STEP_SUMMARY
+          echo "DEV (Direct) ──► QA (Canary + APM) ──► Staging (Blue-Green + Preview)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Quality Gates | ${{ needs.check-quality-gates.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy to ${ENVIRONMENT} | ${{ needs.sync-and-wait.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Jira Tracking | ${{ needs.jira-tracking.result }} |" >> $GITHUB_STEP_SUMMARY
 
           if [ "${AUTO_PROMOTE}" = "true" ] && [ -n "${NEXT_ENV}" ]; then
             echo "| Promote to ${NEXT_ENV} | ${{ needs.auto-promote.result }} |" >> $GITHUB_STEP_SUMMARY
@@ -419,8 +502,15 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Endpoints" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | URL |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------------|-----|" >> $GITHUB_STEP_SUMMARY
-          echo "| DEV | https://opsera-sperigpt-01-dev.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
-          echo "| QA | https://opsera-sperigpt-01-qa.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
-          echo "| Staging | https://opsera-sperigpt-01-staging.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | URL | Strategy |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-----|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| DEV | https://opsera-sperigpt-01-dev.agent.opsera.dev | Direct |" >> $GITHUB_STEP_SUMMARY
+          echo "| QA | https://opsera-sperigpt-01-qa.agent.opsera.dev | Canary |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | https://opsera-sperigpt-01-staging.agent.opsera.dev | Blue-Green |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging Preview | https://preview.opsera-sperigpt-01-staging.agent.opsera.dev | Blue-Green |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Enterprise Features" >> $GITHUB_STEP_SUMMARY
+          echo "- **Quality Gates:** SonarQube SAST, Grype SCA, Gitleaks secrets" >> $GITHUB_STEP_SUMMARY
+          echo "- **Progressive Delivery:** Canary (QA), Blue-Green (Staging)" >> $GITHUB_STEP_SUMMARY
+          echo "- **APM Analysis:** NewRelic error rate, latency, apdex" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Tracking:** Jira integration" >> $GITHUB_STEP_SUMMARY

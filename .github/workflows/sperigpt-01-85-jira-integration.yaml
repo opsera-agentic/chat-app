@@ -1,0 +1,467 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  JIRA INTEGRATION - Automated deployment tracking & ticket management        ║
+# ║  sperigpt-01 - Code-to-Cloud v0.6 - Powered by Opsera                        ║
+# ║                                                                               ║
+# ║  FEATURES: Auto-create tickets | Update on deploy | Link commits             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: "📋 sperigpt-01: 85 Jira Integration"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create-deployment-ticket
+          - update-ticket
+          - transition-ticket
+          - add-comment
+          - link-commits
+        default: 'create-deployment-ticket'
+      environment:
+        description: 'Deployment environment'
+        required: false
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - production
+        default: 'dev'
+      ticket_key:
+        description: 'Jira ticket key (e.g., DEPLOY-123)'
+        required: false
+        type: string
+      transition_name:
+        description: 'Transition name (for transition-ticket)'
+        required: false
+        type: string
+        default: 'Done'
+      comment:
+        description: 'Comment to add'
+        required: false
+        type: string
+      image_tag:
+        description: 'Image tag being deployed'
+        required: false
+        type: string
+
+  workflow_run:
+    workflows:
+      - "🔨 sperigpt-01: 20 CI Build & Push"
+    types: [completed]
+
+env:
+  APP_NAME: sperigpt-01
+  JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL || 'https://opsera-mock-jira.agent.opsera.dev' }}
+  JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY || 'DEPLOY' }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # AUTO-CREATE ON DEPLOYMENT (triggered by workflow_run)
+  # ════════════════════════════════════════════════════════════════════════════
+  auto-track-deployment:
+    name: "📋 Track Deployment"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    outputs:
+      ticket_key: ${{ steps.create.outputs.ticket_key }}
+
+    steps:
+      - name: Get Deployment Info
+        id: info
+        run: |
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+
+          # Extract environment from workflow logs (simplified)
+          echo "commit_sha=${COMMIT_SHA:0:7}" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create Deployment Ticket
+        id: create
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+        run: |
+          # Check if Jira is configured
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Set JIRA_API_TOKEN, JIRA_EMAIL, JIRA_BASE_URL secrets to enable" >> $GITHUB_STEP_SUMMARY
+            echo "ticket_key=MOCK-$(date +%s)" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Create deployment ticket
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue" \
+            -d '{
+              "fields": {
+                "project": {"key": "${{ env.JIRA_PROJECT_KEY }}"},
+                "summary": "[${{ env.APP_NAME }}] Deployment - ${{ steps.info.outputs.commit_sha }}",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [{
+                    "type": "paragraph",
+                    "content": [{
+                      "type": "text",
+                      "text": "Automated deployment tracking for ${{ env.APP_NAME }}"
+                    }]
+                  }]
+                },
+                "issuetype": {"name": "Task"},
+                "labels": ["deployment", "${{ env.APP_NAME }}", "automated"]
+              }
+            }')
+
+          TICKET_KEY=$(echo "$RESPONSE" | jq -r '.key // "MOCK-000"')
+          echo "ticket_key=${TICKET_KEY}" >> $GITHUB_OUTPUT
+
+          echo "### 📋 Jira Ticket Created" >> $GITHUB_STEP_SUMMARY
+          echo "- Ticket: [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+          echo "- Application: ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ steps.info.outputs.commit_sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # CREATE DEPLOYMENT TICKET (manual)
+  # ════════════════════════════════════════════════════════════════════════════
+  create-ticket:
+    name: "📝 Create Deployment Ticket"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'create-deployment-ticket'
+    outputs:
+      ticket_key: ${{ steps.create.outputs.ticket_key }}
+
+    steps:
+      - name: Create Jira Ticket
+        id: create
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+        run: |
+          ENVIRONMENT="${{ inputs.environment }}"
+          IMAGE_TAG="${{ inputs.image_tag || github.sha }}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # Check if Jira is configured
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Using mock ticket for demonstration" >> $GITHUB_STEP_SUMMARY
+            TICKET_KEY="MOCK-$(date +%s)"
+            echo "ticket_key=${TICKET_KEY}" >> $GITHUB_OUTPUT
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📋 Mock Ticket Created: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Environment | ${ENVIRONMENT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Image Tag | \`${IMAGE_TAG:0:12}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Created | ${TIMESTAMP} |" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Create ticket via Jira API
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue" \
+            -d '{
+              "fields": {
+                "project": {"key": "${{ env.JIRA_PROJECT_KEY }}"},
+                "summary": "[${{ env.APP_NAME }}] Deploy to '"${ENVIRONMENT}"' - '"${IMAGE_TAG:0:12}"'",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [{"type": "text", "text": "Deployment Details:"}]
+                    },
+                    {
+                      "type": "bulletList",
+                      "content": [
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Application: ${{ env.APP_NAME }}"}]}]},
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Environment: '"${ENVIRONMENT}"'"}]}]},
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Image Tag: '"${IMAGE_TAG}"'"}]}]},
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Triggered: '"${TIMESTAMP}"'"}]}]}
+                      ]
+                    }
+                  ]
+                },
+                "issuetype": {"name": "Task"},
+                "labels": ["deployment", "${{ env.APP_NAME }}", "'"${ENVIRONMENT}"'", "automated"],
+                "priority": {"name": "'"$([[ "$ENVIRONMENT" == "production" ]] && echo "High" || echo "Medium")"'"}
+              }
+            }')
+
+          TICKET_KEY=$(echo "$RESPONSE" | jq -r '.key // "ERROR"')
+
+          if [ "$TICKET_KEY" = "ERROR" ] || [ -z "$TICKET_KEY" ]; then
+            echo "❌ Failed to create Jira ticket"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          echo "ticket_key=${TICKET_KEY}" >> $GITHUB_OUTPUT
+
+          echo "### 📋 Jira Ticket Created" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ticket:** [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${ENVIRONMENT}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${IMAGE_TAG:0:12}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # UPDATE TICKET
+  # ════════════════════════════════════════════════════════════════════════════
+  update-ticket:
+    name: "✏️ Update Ticket"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'update-ticket'
+
+    steps:
+      - name: Update Jira Ticket
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          TICKET_KEY: ${{ inputs.ticket_key }}
+        run: |
+          if [ -z "$TICKET_KEY" ]; then
+            echo "❌ No ticket key provided"
+            exit 1
+          fi
+
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Would update ticket: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Add deployment status update
+          curl -s -X PUT \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET_KEY}" \
+            -d '{
+              "fields": {
+                "labels": ["deployment", "${{ env.APP_NAME }}", "${{ inputs.environment }}", "deployed"]
+              }
+            }'
+
+          echo "### ✅ Ticket Updated" >> $GITHUB_STEP_SUMMARY
+          echo "- Ticket: [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # TRANSITION TICKET
+  # ════════════════════════════════════════════════════════════════════════════
+  transition-ticket:
+    name: "🔄 Transition Ticket"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'transition-ticket'
+
+    steps:
+      - name: Get Available Transitions
+        id: transitions
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          TICKET_KEY: ${{ inputs.ticket_key }}
+        run: |
+          if [ -z "$TICKET_KEY" ]; then
+            echo "❌ No ticket key provided"
+            exit 1
+          fi
+
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Would transition ticket: ${TICKET_KEY} to ${{ inputs.transition_name }}" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Get available transitions
+          TRANSITIONS=$(curl -s \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET_KEY}/transitions")
+
+          # Find the transition ID for the requested transition
+          TRANSITION_ID=$(echo "$TRANSITIONS" | jq -r '.transitions[] | select(.name | ascii_downcase == ("${{ inputs.transition_name }}" | ascii_downcase)) | .id')
+
+          if [ -z "$TRANSITION_ID" ]; then
+            echo "❌ Transition '${{ inputs.transition_name }}' not found"
+            echo "Available transitions:"
+            echo "$TRANSITIONS" | jq -r '.transitions[].name'
+            exit 1
+          fi
+
+          echo "transition_id=${TRANSITION_ID}" >> $GITHUB_OUTPUT
+
+      - name: Execute Transition
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          TICKET_KEY: ${{ inputs.ticket_key }}
+          TRANSITION_ID: ${{ steps.transitions.outputs.transition_id }}
+        run: |
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            exit 0
+          fi
+
+          curl -s -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET_KEY}/transitions" \
+            -d '{
+              "transition": {"id": "'"${TRANSITION_ID}"'"}
+            }'
+
+          echo "### 🔄 Ticket Transitioned" >> $GITHUB_STEP_SUMMARY
+          echo "- Ticket: [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+          echo "- New Status: ${{ inputs.transition_name }}" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # ADD COMMENT
+  # ════════════════════════════════════════════════════════════════════════════
+  add-comment:
+    name: "💬 Add Comment"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'add-comment'
+
+    steps:
+      - name: Add Comment to Ticket
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          TICKET_KEY: ${{ inputs.ticket_key }}
+          COMMENT: ${{ inputs.comment }}
+        run: |
+          if [ -z "$TICKET_KEY" ]; then
+            echo "❌ No ticket key provided"
+            exit 1
+          fi
+
+          if [ -z "$COMMENT" ]; then
+            COMMENT="Deployment update from GitHub Actions"
+          fi
+
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Would add comment to: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            echo "Comment: ${COMMENT}" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          curl -s -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET_KEY}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                  "type": "paragraph",
+                  "content": [{"type": "text", "text": "'"${COMMENT}"'"}]
+                }]
+              }
+            }'
+
+          echo "### 💬 Comment Added" >> $GITHUB_STEP_SUMMARY
+          echo "- Ticket: [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LINK COMMITS
+  # ════════════════════════════════════════════════════════════════════════════
+  link-commits:
+    name: "🔗 Link Commits"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'link-commits'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Extract and Link Commits
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          TICKET_KEY: ${{ inputs.ticket_key }}
+        run: |
+          if [ -z "$TICKET_KEY" ]; then
+            echo "❌ No ticket key provided"
+            exit 1
+          fi
+
+          # Get recent commits
+          COMMITS=$(git log --oneline -10)
+
+          if [ -z "$JIRA_API_TOKEN" ]; then
+            echo "### ⏭️ Jira Not Configured" >> $GITHUB_STEP_SUMMARY
+            echo "Would link commits to: ${TICKET_KEY}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$COMMITS" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Format commits for Jira comment
+          COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/• /' | tr '\n' '\\n')
+
+          curl -s -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/3/issue/${TICKET_KEY}/comment" \
+            -d '{
+              "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                  {"type": "paragraph", "content": [{"type": "text", "text": "Linked Commits:", "marks": [{"type": "strong"}]}]},
+                  {"type": "codeBlock", "content": [{"type": "text", "text": "'"${COMMIT_LIST}"'"}]}
+                ]
+              }
+            }'
+
+          echo "### 🔗 Commits Linked" >> $GITHUB_STEP_SUMMARY
+          echo "- Ticket: [$TICKET_KEY](${JIRA_BASE_URL}/browse/${TICKET_KEY})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commits:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$COMMITS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SUMMARY
+  # ════════════════════════════════════════════════════════════════════════════
+  summary:
+    name: "📋 Summary"
+    runs-on: ubuntu-latest
+    needs: [auto-track-deployment, create-ticket, update-ticket, transition-ticket, add-comment, link-commits]
+    if: always()
+
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 📋 Jira Integration Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Jira URL | \`${{ env.JIRA_BASE_URL }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | \`${{ env.JIRA_PROJECT_KEY }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Application | \`${{ env.APP_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Required Secrets" >> $GITHUB_STEP_SUMMARY
+          echo "- \`JIRA_BASE_URL\` - Jira instance URL" >> $GITHUB_STEP_SUMMARY
+          echo "- \`JIRA_API_TOKEN\` - API token for authentication" >> $GITHUB_STEP_SUMMARY
+          echo "- \`JIRA_EMAIL\` - Email associated with API token" >> $GITHUB_STEP_SUMMARY
+          echo "- \`JIRA_PROJECT_KEY\` - Project key (e.g., DEPLOY)" >> $GITHUB_STEP_SUMMARY

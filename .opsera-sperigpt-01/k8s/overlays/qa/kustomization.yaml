@@ -19,6 +19,7 @@ resources:
   - ingress.yaml
   - configmap.yaml
   - analysis-template.yaml
+  - analysis-template-newrelic.yaml
 
 images:
   - name: sperigpt-01-frontend
