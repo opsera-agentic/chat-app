@@ -12,10 +12,10 @@ commonLabels:
 
 images:
   - name: sperichatgpt2-backend
-    newName: PLACEHOLDER_ECR_BACKEND
+    newName: 792373136340.dkr.ecr.us-east-1.amazonaws.com/opseratest/sperichatgpt2-backend
     newTag: latest
   - name: sperichatgpt2-frontend
-    newName: PLACEHOLDER_ECR_FRONTEND
+    newName: 792373136340.dkr.ecr.us-east-1.amazonaws.com/opseratest/sperichatgpt2-frontend
     newTag: latest
 
 patches:
