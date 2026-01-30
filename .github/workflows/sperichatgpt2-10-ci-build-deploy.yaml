@@ -1,0 +1,339 @@
+# ════════════════════════════════════════════════════════════════════════════
+# CI/CD WORKFLOW - sperichatgpt2
+# Build, push to ECR, and deploy to DEV
+# ════════════════════════════════════════════════════════════════════════════
+
+name: "sperichatgpt2: 10 CI Build & Deploy"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - '.opsera-sperichatgpt2/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        options: [dev]
+        default: 'dev'
+
+env:
+  APP_NAME: sperichatgpt2
+  TENANT: opseratest
+  AWS_REGION: us-east-1
+  EKS_HUB_CLUSTER: argocd-use1
+  EKS_SPOKE_CLUSTER: opseratest-use1-np
+  DOMAIN: agent.opsera.dev
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  # VERIFY PREREQUISITES
+  # ════════════════════════════════════════════════════════════════════════════
+  verify-prerequisites:
+    name: "🔍 Verify Prerequisites"
+    runs-on: ubuntu-latest
+    outputs:
+      account_id: ${{ steps.aws.outputs.account_id }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      ecr_backend: ${{ steps.ecr.outputs.backend }}
+      ecr_frontend: ${{ steps.ecr.outputs.frontend }}
+      environment: ${{ steps.env.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: aws
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Determine Environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            ENVIRONMENT="dev"
+          else
+            ENVIRONMENT="${{ inputs.environment }}"
+          fi
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+      - name: Generate Image Tag
+        id: tag
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "### Image Tag: \`$IMAGE_TAG\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Calculate ECR URIs
+        id: ecr
+        run: |
+          ACCOUNT_ID="${{ steps.aws.outputs.account_id }}"
+          BACKEND="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-backend"
+          FRONTEND="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-frontend"
+          echo "backend=$BACKEND" >> $GITHUB_OUTPUT
+          echo "frontend=$FRONTEND" >> $GITHUB_OUTPUT
+
+      - name: Verify ECR Repositories Exist
+        run: |
+          # Check backend repo
+          if ! aws ecr describe-repositories --repository-names "${{ env.TENANT }}/${{ env.APP_NAME }}-backend" 2>/dev/null; then
+            echo "❌ Backend ECR repository not found. Run bootstrap first!"
+            exit 1
+          fi
+
+          # Check frontend repo
+          if ! aws ecr describe-repositories --repository-names "${{ env.TENANT }}/${{ env.APP_NAME }}-frontend" 2>/dev/null; then
+            echo "❌ Frontend ECR repository not found. Run bootstrap first!"
+            exit 1
+          fi
+
+          echo "✅ ECR repositories verified"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # BUILD & PUSH BACKEND
+  # ════════════════════════════════════════════════════════════════════════════
+  build-backend:
+    name: "🔨 Build Backend"
+    needs: [verify-prerequisites]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ needs.verify-prerequisites.outputs.ecr_backend }}
+
+      - name: Build & Push Backend
+        run: |
+          IMAGE="${{ needs.verify-prerequisites.outputs.ecr_backend }}:${{ needs.verify-prerequisites.outputs.image_tag }}"
+
+          docker build \
+            -f .opsera-${{ env.APP_NAME }}/Dockerfile.backend \
+            -t $IMAGE \
+            .
+
+          docker push $IMAGE
+
+          echo "### ✅ Backend Image Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "\`$IMAGE\`" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # BUILD & PUSH FRONTEND
+  # ════════════════════════════════════════════════════════════════════════════
+  build-frontend:
+    name: "🔨 Build Frontend"
+    needs: [verify-prerequisites]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ needs.verify-prerequisites.outputs.ecr_frontend }}
+
+      - name: Build & Push Frontend
+        run: |
+          IMAGE="${{ needs.verify-prerequisites.outputs.ecr_frontend }}:${{ needs.verify-prerequisites.outputs.image_tag }}"
+
+          docker build \
+            -f .opsera-${{ env.APP_NAME }}/Dockerfile.frontend \
+            -t $IMAGE \
+            .
+
+          docker push $IMAGE
+
+          echo "### ✅ Frontend Image Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "\`$IMAGE\`" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # UPDATE MANIFESTS
+  # ════════════════════════════════════════════════════════════════════════════
+  update-manifests:
+    name: "📝 Update Manifests"
+    needs: [verify-prerequisites, build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update Kustomization with New Tag
+        run: |
+          KUST_FILE=".opsera-${{ env.APP_NAME }}/k8s/overlays/${{ needs.verify-prerequisites.outputs.environment }}/kustomization.yaml"
+          IMAGE_TAG="${{ needs.verify-prerequisites.outputs.image_tag }}"
+
+          # Update image tags using sed
+          sed -i "s/newTag: .*/newTag: $IMAGE_TAG/g" "$KUST_FILE"
+
+          echo "### Updated kustomization.yaml" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+          cat "$KUST_FILE" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .opsera-${{ env.APP_NAME }}/k8s/overlays/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore(${{ env.APP_NAME }}): update images to ${{ needs.verify-prerequisites.outputs.image_tag }} [skip ci]"
+            git pull --rebase origin main
+            git push origin main
+          fi
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SYNC & DEPLOY
+  # ════════════════════════════════════════════════════════════════════════════
+  sync-and-deploy:
+    name: "🚀 Sync & Deploy"
+    needs: [verify-prerequisites, update-manifests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Force ArgoCD Sync
+        run: |
+          APP_NAME="${{ env.APP_NAME }}-${{ needs.verify-prerequisites.outputs.environment }}"
+
+          # RULE 66: Force sync, don't rely on auto-sync
+          kubectl annotate application $APP_NAME -n argocd \
+            argocd.argoproj.io/refresh=hard --overwrite || true
+
+          echo "✅ ArgoCD sync triggered"
+
+      - name: Wait for Sync
+        run: |
+          APP_NAME="${{ env.APP_NAME }}-${{ needs.verify-prerequisites.outputs.environment }}"
+
+          echo "Waiting for ArgoCD sync..."
+          for i in {1..30}; do
+            SYNC_STATUS=$(kubectl get application $APP_NAME -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH_STATUS=$(kubectl get application $APP_NAME -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+
+            echo "Attempt $i/30: Sync=$SYNC_STATUS, Health=$HEALTH_STATUS"
+
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ]; then
+              echo "✅ Application is synced and healthy"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "⚠️ Timeout waiting for sync - check ArgoCD for details"
+
+      - name: Configure kubectl for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Verify Pods Running
+        run: |
+          NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ needs.verify-prerequisites.outputs.environment }}"
+
+          echo "### Pod Status" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n $NAMESPACE -o wide >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Namespace not yet created" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SUMMARY
+  # ════════════════════════════════════════════════════════════════════════════
+  summary:
+    name: "📋 Summary"
+    needs: [verify-prerequisites, build-backend, build-frontend, update-manifests, sync-and-deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          ENVIRONMENT="${{ needs.verify-prerequisites.outputs.environment }}"
+          IMAGE_TAG="${{ needs.verify-prerequisites.outputs.image_tag }}"
+
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # 📋 Deployment Summary: ${{ env.APP_NAME }}
+
+          ## Build Info
+          | Field | Value |
+          |-------|-------|
+          | **Image Tag** | \`$IMAGE_TAG\` |
+          | **Environment** | \`$ENVIRONMENT\` |
+          | **Commit** | \`${{ github.sha }}\` |
+          | **Triggered By** | ${{ github.actor }} |
+
+          ## Job Results
+          | Job | Status |
+          |-----|--------|
+          | Verify Prerequisites | ${{ needs.verify-prerequisites.result }} |
+          | Build Backend | ${{ needs.build-backend.result }} |
+          | Build Frontend | ${{ needs.build-frontend.result }} |
+          | Update Manifests | ${{ needs.update-manifests.result }} |
+          | Sync & Deploy | ${{ needs.sync-and-deploy.result }} |
+
+          ## Application URL
+          🌐 **https://${{ env.TENANT }}-${{ env.APP_NAME }}-${ENVIRONMENT}.${{ env.DOMAIN }}**
+
+          ## Verification Commands
+          \`\`\`bash
+          # Check pods
+          kubectl get pods -n ${{ env.TENANT }}-${{ env.APP_NAME }}-${ENVIRONMENT}
+
+          # Check ArgoCD app
+          kubectl get application ${{ env.APP_NAME }}-${ENVIRONMENT} -n argocd
+
+          # Test endpoint
+          curl -I https://${{ env.TENANT }}-${{ env.APP_NAME }}-${ENVIRONMENT}.${{ env.DOMAIN }}
+          \`\`\`
+          EOF

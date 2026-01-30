@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opseratest-sperichatgpt2-dev
+  labels:
+    app: sperichatgpt2
+    environment: dev
+    tenant: opseratest

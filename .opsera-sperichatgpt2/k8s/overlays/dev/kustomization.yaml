@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: opseratest-sperichatgpt2-dev
+
+resources:
+  - ../../base
+
+commonLabels:
+  environment: dev
+  tenant: opseratest
+
+images:
+  - name: sperichatgpt2-backend
+    newName: PLACEHOLDER_ECR_BACKEND
+    newTag: latest
+  - name: sperichatgpt2-frontend
+    newName: PLACEHOLDER_ECR_FRONTEND
+    newTag: latest
+
+patches:
+  # Patch ingress for dev environment
+  - target:
+      kind: Ingress
+      name: sperichatgpt2
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: opseratest-sperichatgpt2-dev.agent.opsera.dev
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: opseratest-sperichatgpt2-dev.agent.opsera.dev
+      - op: replace
+        path: /spec/tls/0/secretName
+        value: opseratest-sperichatgpt2-dev-tls
+
+  # Scale down for dev
+  - target:
+      kind: Deployment
+      name: sperichatgpt2-backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  - target:
+      kind: Deployment
+      name: sperichatgpt2-frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1

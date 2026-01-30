@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sperichatgpt2-frontend
+  labels:
+    app: sperichatgpt2
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sperichatgpt2
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: sperichatgpt2
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: sperichatgpt2-frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              protocol: TCP
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+      imagePullSecrets:
+        - name: ecr-secret
