@@ -13,10 +13,10 @@ commonLabels:
 images:
   - name: sperichatgpt2-backend
     newName: 792373136340.dkr.ecr.us-east-1.amazonaws.com/opseratest/sperichatgpt2-backend
-    newTag: latest
+    newTag: 4e92b19-20260130183508
   - name: sperichatgpt2-frontend
     newName: 792373136340.dkr.ecr.us-east-1.amazonaws.com/opseratest/sperichatgpt2-frontend
-    newTag: latest
+    newTag: 4e92b19-20260130183508
 
 patches:
   # Patch ingress for dev environment
