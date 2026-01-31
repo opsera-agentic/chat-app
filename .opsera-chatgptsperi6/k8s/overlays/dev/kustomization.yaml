@@ -13,10 +13,10 @@ commonLabels:
 images:
   - name: chatgptsperi6-frontend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-frontend
-    newTag: d005b97-20260131121342
+    newTag: 4d8f9b1-20260131122738
   - name: chatgptsperi6-backend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-backend
-    newTag: d005b97-20260131121342
+    newTag: 4d8f9b1-20260131122738
 
 # Replica count for DEV environment
 replicas:
