@@ -284,6 +284,30 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Refresh ECR Registry Secret
+        run: |
+          ENVIRONMENT="${{ needs.verify-bootstrap.outputs.environment }}"
+          NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${ENVIRONMENT}"
+          ACCOUNT_ID="${{ needs.verify-bootstrap.outputs.account_id }}"
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+
+          # Configure kubectl for spoke cluster
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          # Ensure namespace exists
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+          # Get fresh ECR login token and update secret
+          ECR_TOKEN=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})
+          kubectl create secret docker-registry ecr-registry-secret \
+            --namespace=$NAMESPACE \
+            --docker-server=$ECR_REGISTRY \
+            --docker-username=AWS \
+            --docker-password="$ECR_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "✅ ECR registry secret refreshed"
+
       - name: Configure kubectl for Hub Cluster
         run: |
           aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}

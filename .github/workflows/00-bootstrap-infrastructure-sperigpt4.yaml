@@ -133,11 +133,67 @@ jobs:
           echo "- Backend: \`${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-backend\`" >> $GITHUB_STEP_SUMMARY
 
   # ═══════════════════════════════════════════════════════════════════════════
+  # ECR REGISTRY SECRET (RULE 81: Required for private ECR)
+  # ═══════════════════════════════════════════════════════════════════════════
+  create-ecr-secret:
+    name: "🔐 Create ECR Registry Secret"
+    needs: [validate, create-ecr]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+      - name: Configure kubectl for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Create Namespace
+        run: |
+          NAMESPACE="${{ needs.validate.outputs.namespace }}"
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+          echo "✅ Namespace created: $NAMESPACE"
+
+      - name: Create ECR Registry Secret
+        run: |
+          NAMESPACE="${{ needs.validate.outputs.namespace }}"
+          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+          ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+
+          # Get ECR login token
+          ECR_TOKEN=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})
+
+          # Create or update the docker-registry secret
+          kubectl create secret docker-registry ecr-registry-secret \
+            --namespace=$NAMESPACE \
+            --docker-server=$ECR_REGISTRY \
+            --docker-username=AWS \
+            --docker-password="$ECR_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "✅ ECR registry secret created in namespace: $NAMESPACE"
+
+      - name: Summary
+        run: |
+          echo "### 🔐 ECR Registry Secret" >> $GITHUB_STEP_SUMMARY
+          echo "- Secret: \`ecr-registry-secret\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Namespace: \`${{ needs.validate.outputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # SPOKE CLUSTER REGISTRATION (RULE 103: Only in infrastructure setup)
   # ═══════════════════════════════════════════════════════════════════════════
   register-spoke:
     name: "🔗 Register Spoke with ArgoCD Hub"
-    needs: [validate, create-ecr]
+    needs: [validate, create-ecr, create-ecr-secret]
     runs-on: ubuntu-latest
     if: inputs.skip_spoke_registration == false
     steps:
@@ -480,7 +536,7 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
   summary:
     name: "📋 Bootstrap Summary"
-    needs: [validate, create-ecr, register-spoke, create-argocd-app, setup-ingress, update-manifests]
+    needs: [validate, create-ecr, create-ecr-secret, register-spoke, create-argocd-app, setup-ingress, update-manifests]
     if: always()
     runs-on: ubuntu-latest
     steps:
