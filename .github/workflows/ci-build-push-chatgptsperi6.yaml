@@ -247,13 +247,15 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore(${{ env.APP_NAME }}): update images to ${{ needs.verify-prerequisites.outputs.image_tag }} [skip ci]
+            git commit -m "$(cat <<'EOF'
+          chore(${{ env.APP_NAME }}): update images to ${{ needs.verify-prerequisites.outputs.image_tag }} [skip ci]
 
-Environment: ${{ needs.verify-prerequisites.outputs.environment }}
-Frontend: ${{ needs.verify-prerequisites.outputs.ecr_frontend }}:${{ needs.verify-prerequisites.outputs.image_tag }}
-Backend: ${{ needs.verify-prerequisites.outputs.ecr_backend }}:${{ needs.verify-prerequisites.outputs.image_tag }}
+          Environment: ${{ needs.verify-prerequisites.outputs.environment }}
+          Image: ${{ needs.verify-prerequisites.outputs.image_tag }}
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+          Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+          EOF
+          )"
 
             git pull --rebase origin main
             git push origin main
