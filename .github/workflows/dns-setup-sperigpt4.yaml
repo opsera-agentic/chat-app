@@ -1,23 +1,20 @@
-# ═══════════════════════════════════════════════════════════════════════════════
 # DNS SETUP - sperigpt4
 # Code-to-Cloud Enterprise v1.7.3
-#
 # RULE 94: DNS setup as separate one-time workflow (not in CI/CD)
-# Creates Route53 CNAME record pointing to NGINX Ingress Load Balancer
-# ═══════════════════════════════════════════════════════════════════════════════
 
-name: "🌐 sperigpt4: DNS Setup"
+name: sperigpt4 DNS Setup
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to setup DNS for'
+        description: Environment to setup DNS for
         type: choice
-        options: [dev]
+        options:
+          - dev
         default: dev
       confirm:
-        description: '☑️ I confirm this DNS setup'
+        description: Confirm this DNS setup
         type: boolean
         default: false
         required: true
@@ -34,11 +31,8 @@ permissions:
   id-token: write
 
 jobs:
-  # ═══════════════════════════════════════════════════════════════════════════
-  # CHECK DNS STATUS
-  # ═══════════════════════════════════════════════════════════════════════════
   check-dns:
-    name: "🔍 Check DNS Status"
+    name: Check DNS Status
     runs-on: ubuntu-latest
     if: inputs.confirm == true
     outputs:
@@ -56,33 +50,18 @@ jobs:
         id: check
         run: |
           FQDN="${{ steps.vars.outputs.fqdn }}"
-
           echo "Checking DNS for: ${FQDN}"
-
-          # Check if DNS already resolves
           RESOLVED=$(dig +short ${FQDN} @8.8.8.8 | head -1 || echo "")
-
           if [ -n "$RESOLVED" ]; then
-            echo "✅ DNS already configured: ${RESOLVED}"
+            echo "DNS already configured: ${RESOLVED}"
             echo "needs_setup=false" >> $GITHUB_OUTPUT
-
-            # RULE 91: Verify region
-            if echo "$RESOLVED" | grep -q "us-west-2"; then
-              echo "✅ DNS points to correct region (us-west-2)"
-            else
-              echo "⚠️ DNS may point to different region"
-              echo "Current target: ${RESOLVED}"
-            fi
           else
-            echo "📝 DNS not configured - setup needed"
+            echo "DNS not configured - setup needed"
             echo "needs_setup=true" >> $GITHUB_OUTPUT
           fi
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # CONFIGURE DNS
-  # ═══════════════════════════════════════════════════════════════════════════
   configure-dns:
-    name: "🌐 Configure Route53 DNS"
+    name: Configure Route53 DNS
     needs: [check-dns]
     if: needs.check-dns.outputs.needs_setup == 'true'
     runs-on: ubuntu-latest
@@ -103,57 +82,37 @@ jobs:
       - name: Get Load Balancer Hostname
         id: lb
         run: |
-          # Check if ingress-nginx service exists
-          if ! kubectl get svc ingress-nginx-controller -n ingress-nginx &>/dev/null; then
-            echo "❌ NGINX Ingress Controller not found"
-            echo "Run bootstrap workflow first!"
+          if ! kubectl get svc ingress-nginx-controller -n ingress-nginx; then
+            echo "NGINX Ingress Controller not found"
             exit 1
           fi
-
-          LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
-            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-
+          LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           if [ -z "$LB_HOSTNAME" ]; then
-            echo "❌ Load Balancer not ready"
+            echo "Load Balancer not ready"
             exit 1
           fi
-
           echo "Load Balancer: ${LB_HOSTNAME}"
           echo "hostname=${LB_HOSTNAME}" >> $GITHUB_OUTPUT
-
-          # RULE 91: Verify region
-          if echo "$LB_HOSTNAME" | grep -q "us-west-2"; then
-            echo "✅ Load Balancer in correct region (us-west-2)"
-          else
-            echo "⚠️ Load Balancer may be in different region"
-          fi
 
       - name: Discover Hosted Zone
         id: zone
         run: |
-          # Find hosted zone for domain
-          ZONE_ID=$(aws route53 list-hosted-zones \
-            --query "HostedZones[?ends_with(Name, '${{ env.DOMAIN }}.')].Id" \
-            --output text | cut -d'/' -f3 | head -1)
-
+          ZONE_ID=$(aws route53 list-hosted-zones --query "HostedZones[?ends_with(Name, '${{ env.DOMAIN }}.')].Id" --output text | cut -d'/' -f3 | head -1)
           if [ -z "$ZONE_ID" ]; then
-            echo "❌ Hosted zone not found for: ${{ env.DOMAIN }}"
-            echo "Available zones:"
+            echo "Hosted zone not found for: ${{ env.DOMAIN }}"
             aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table
             exit 1
           fi
-
           echo "Hosted Zone ID: ${ZONE_ID}"
           echo "zone_id=${ZONE_ID}" >> $GITHUB_OUTPUT
 
-      - name: Create DNS Record (RULE 56: with fallback)
+      - name: Create DNS Record
         id: create-dns
         run: |
           FQDN="${{ needs.check-dns.outputs.fqdn }}"
           LB_HOSTNAME="${{ steps.lb.outputs.hostname }}"
           ZONE_ID="${{ steps.zone.outputs.zone_id }}"
 
-          # Prepare change batch
           cat > /tmp/dns-change.json <<EOF
           {
             "Changes": [{
@@ -171,47 +130,27 @@ jobs:
           echo "DNS Change Batch:"
           cat /tmp/dns-change.json
 
-          # Try DNS automation with error handling (RULE 56)
           set +e
-          CHANGE_OUTPUT=$(aws route53 change-resource-record-sets \
-            --hosted-zone-id $ZONE_ID \
-            --change-batch file:///tmp/dns-change.json \
-            --query 'ChangeInfo.Id' \
-            --output text 2>&1)
+          CHANGE_OUTPUT=$(aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch file:///tmp/dns-change.json --query 'ChangeInfo.Id' --output text 2>&1)
           DNS_EXIT_CODE=$?
           set -e
 
           if [ $DNS_EXIT_CODE -eq 0 ]; then
-            echo "✅ DNS Record Created: ${CHANGE_OUTPUT}"
+            echo "DNS Record Created: ${CHANGE_OUTPUT}"
             echo "dns_automated=true" >> $GITHUB_OUTPUT
-
-            echo "### ✅ DNS Record Created" >> $GITHUB_STEP_SUMMARY
-            echo "- FQDN: \`${FQDN}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Target: \`${LB_HOSTNAME}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Change ID: \`${CHANGE_OUTPUT}\`" >> $GITHUB_STEP_SUMMARY
+            echo "### DNS Record Created" >> $GITHUB_STEP_SUMMARY
+            echo "- FQDN: ${FQDN}" >> $GITHUB_STEP_SUMMARY
+            echo "- Target: ${LB_HOSTNAME}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️ DNS automation failed"
-            echo "Error: ${CHANGE_OUTPUT}"
+            echo "DNS automation failed: ${CHANGE_OUTPUT}"
             echo "dns_automated=false" >> $GITHUB_OUTPUT
-
-            echo "### ⚠️ DNS Automation Failed - Manual Setup Required" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Hosted Zone | \`${{ env.DOMAIN }}\` (${ZONE_ID}) |" >> $GITHUB_STEP_SUMMARY
-            echo "| Record Name | \`${FQDN}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Type | CNAME |" >> $GITHUB_STEP_SUMMARY
-            echo "| Value | \`${LB_HOSTNAME}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| TTL | 300 |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Error:** \`${CHANGE_OUTPUT}\`" >> $GITHUB_STEP_SUMMARY
+            echo "### DNS Setup Failed - Manual Required" >> $GITHUB_STEP_SUMMARY
+            echo "FQDN: ${FQDN}" >> $GITHUB_STEP_SUMMARY
+            echo "Target: ${LB_HOSTNAME}" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # WAIT FOR PROPAGATION
-  # ═══════════════════════════════════════════════════════════════════════════
   wait-propagation:
-    name: "⏳ Wait for DNS Propagation"
+    name: Wait for DNS Propagation
     needs: [check-dns, configure-dns]
     if: always() && (needs.configure-dns.outputs.dns_automated == 'true' || needs.check-dns.outputs.needs_setup == 'false')
     runs-on: ubuntu-latest
@@ -219,34 +158,20 @@ jobs:
       - name: Wait for DNS Propagation
         run: |
           FQDN="${{ needs.check-dns.outputs.fqdn }}"
-
           echo "Waiting for DNS propagation: ${FQDN}"
-
           for i in {1..30}; do
             RESOLVED=$(dig +short ${FQDN} @8.8.8.8 | head -1 || echo "")
-
             if [ -n "$RESOLVED" ]; then
-              echo "✅ DNS propagated!"
-              echo "  ${FQDN} → ${RESOLVED}"
-
-              echo "### ✅ DNS Propagated" >> $GITHUB_STEP_SUMMARY
-              echo "- FQDN: \`${FQDN}\`" >> $GITHUB_STEP_SUMMARY
-              echo "- Resolves to: \`${RESOLVED}\`" >> $GITHUB_STEP_SUMMARY
+              echo "DNS propagated: ${FQDN} -> ${RESOLVED}"
               exit 0
             fi
-
             echo "Attempt $i/30 - waiting..."
             sleep 10
           done
+          echo "DNS not yet propagated - may need more time"
 
-          echo "⚠️ DNS not yet fully propagated - may need more time"
-          echo "Check manually: dig ${FQDN} @8.8.8.8"
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SUMMARY
-  # ═══════════════════════════════════════════════════════════════════════════
   summary:
-    name: "📋 Summary"
+    name: Summary
     needs: [check-dns, configure-dns, wait-propagation]
     if: always()
     runs-on: ubuntu-latest
@@ -254,29 +179,6 @@ jobs:
       - name: Generate Summary
         run: |
           FQDN="${{ needs.check-dns.outputs.fqdn }}"
-
-          cat << EOF >> $GITHUB_STEP_SUMMARY
-
-          ---
-
-          ## 🎉 DNS Setup Complete
-
-          ### Access Your Application
-          - **URL**: https://${FQDN}
-          - **Environment**: ${{ inputs.environment }}
-
-          ### Verification Commands
-          \`\`\`bash
-          # Check DNS resolution
-          dig +short ${FQDN}
-
-          # Test HTTPS (after cert issuance)
-          curl -I https://${FQDN}
-          \`\`\`
-
-          ### Notes
-          - DNS typically propagates in 2-5 minutes
-          - TLS certificate will be issued automatically by cert-manager
-          - First certificate issuance may take 2-3 minutes
-
-          EOF
+          echo "## DNS Setup Complete" >> $GITHUB_STEP_SUMMARY
+          echo "URL: https://${FQDN}" >> $GITHUB_STEP_SUMMARY
+          echo "Environment: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
