@@ -15,10 +15,10 @@ labels:
 images:
   - name: chatgptsperi6-frontend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-frontend
-    newTag: 4d8f9b1-20260131122738
+    newTag: c522b39-20260131124109
   - name: chatgptsperi6-backend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-backend
-    newTag: 4d8f9b1-20260131122738
+    newTag: c522b39-20260131124109
 
 # Replica count for DEV environment
 replicas:
