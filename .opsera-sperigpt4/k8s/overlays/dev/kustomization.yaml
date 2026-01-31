@@ -12,10 +12,10 @@ commonLabels:
 # Images will be updated by CI/CD workflow
 images:
   - name: sperigpt4-frontend
-    newName: PLACEHOLDER_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-frontend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-frontend
     newTag: latest
   - name: sperigpt4-backend
-    newName: PLACEHOLDER_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-backend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-backend
     newTag: latest
 
 # Patches for dev environment
