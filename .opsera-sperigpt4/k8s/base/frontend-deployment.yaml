@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sperigpt4-frontend
+  labels:
+    app: sperigpt4
+    component: frontend
+    tenant: opsera
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sperigpt4
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: sperigpt4
+        component: frontend
+        tenant: opsera
+    spec:
+      # RULE 81: imagePullSecrets REQUIRED for private ECR
+      imagePullSecrets:
+        - name: ecr-registry-secret
+      containers:
+        - name: frontend
+          image: sperigpt4-frontend:latest
+          # RULE 80: imagePullPolicy: Always for Argo Rollouts compatibility
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              protocol: TCP
+          # RULE 79: SPA health check is / not /health
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          securityContext:
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+      restartPolicy: Always

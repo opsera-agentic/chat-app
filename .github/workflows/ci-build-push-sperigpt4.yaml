@@ -1,0 +1,427 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CI/CD BUILD & PUSH - sperigpt4
+# Code-to-Cloud Enterprise v1.7.3
+#
+# Triggered on push to main or manual dispatch
+# Builds frontend + backend containers and deploys via ArgoCD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: "🚀 sperigpt4: CI Build & Push"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - '.opsera-sperigpt4/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        options: [dev]
+        default: dev
+      skip_build:
+        description: 'Skip build (use existing image tag)'
+        type: boolean
+        default: false
+      image_tag:
+        description: 'Existing image tag (if skip_build=true)'
+        type: string
+
+env:
+  APP_NAME: sperigpt4
+  TENANT: opsera
+  AWS_REGION: us-west-2
+  SPOKE_CLUSTER: opsera-usw2-np
+  HUB_CLUSTER: argocd-usw2
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VERIFY PREREQUISITES
+  # ═══════════════════════════════════════════════════════════════════════════
+  verify-bootstrap:
+    name: "🔍 Verify Bootstrap"
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      account_id: ${{ steps.account.outputs.account_id }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      ecr_frontend: ${{ steps.ecr.outputs.frontend }}
+      ecr_backend: ${{ steps.ecr.outputs.backend }}
+    steps:
+      - name: Determine Environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            ENVIRONMENT="dev"
+          else
+            ENVIRONMENT="${{ inputs.environment }}"
+          fi
+          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+      - name: Calculate Image Tag
+        id: tag
+        run: |
+          if [ "${{ inputs.skip_build }}" = "true" ] && [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            TIMESTAMP=$(date +%Y%m%d%H%M%S)
+            IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          fi
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image Tag: ${IMAGE_TAG}"
+
+      - name: Set ECR URLs
+        id: ecr
+        run: |
+          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+          ECR_FRONTEND="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-frontend"
+          ECR_BACKEND="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-backend"
+
+          echo "frontend=${ECR_FRONTEND}" >> $GITHUB_OUTPUT
+          echo "backend=${ECR_BACKEND}" >> $GITHUB_OUTPUT
+
+      - name: Verify ECR Repositories Exist
+        run: |
+          # Check frontend repo
+          if ! aws ecr describe-repositories --repository-names "${{ env.TENANT }}/${{ env.APP_NAME }}-frontend" 2>/dev/null; then
+            echo "❌ Frontend ECR repository not found. Run bootstrap first!"
+            exit 1
+          fi
+
+          # Check backend repo
+          if ! aws ecr describe-repositories --repository-names "${{ env.TENANT }}/${{ env.APP_NAME }}-backend" 2>/dev/null; then
+            echo "❌ Backend ECR repository not found. Run bootstrap first!"
+            exit 1
+          fi
+
+          echo "✅ ECR repositories verified"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SECURITY SCANNING (Parallel with Build)
+  # ═══════════════════════════════════════════════════════════════════════════
+  security-scan:
+    name: "🔐 Security Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks Secrets Scan
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Grype SCA Scan
+        uses: anchore/scan-action@v3
+        continue-on-error: true
+        with:
+          path: "."
+          fail-build: false
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BUILD FRONTEND
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-frontend:
+    name: "🏗️ Build Frontend"
+    needs: [verify-bootstrap]
+    if: inputs.skip_build != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ needs.verify-bootstrap.outputs.ecr_frontend }}
+
+      - name: Build and Push Frontend
+        run: |
+          ECR_URL="${{ needs.verify-bootstrap.outputs.ecr_frontend }}"
+          IMAGE_TAG="${{ needs.verify-bootstrap.outputs.image_tag }}"
+
+          echo "Building frontend image..."
+          docker build -t ${ECR_URL}:${IMAGE_TAG} -f frontend/Dockerfile frontend/
+          docker tag ${ECR_URL}:${IMAGE_TAG} ${ECR_URL}:latest
+
+          echo "Pushing frontend image..."
+          docker push ${ECR_URL}:${IMAGE_TAG}
+          docker push ${ECR_URL}:latest
+
+          echo "✅ Frontend pushed: ${ECR_URL}:${IMAGE_TAG}"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BUILD BACKEND
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-backend:
+    name: "🏗️ Build Backend"
+    needs: [verify-bootstrap]
+    if: inputs.skip_build != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ needs.verify-bootstrap.outputs.ecr_backend }}
+
+      - name: Build and Push Backend
+        run: |
+          ECR_URL="${{ needs.verify-bootstrap.outputs.ecr_backend }}"
+          IMAGE_TAG="${{ needs.verify-bootstrap.outputs.image_tag }}"
+
+          echo "Building backend image..."
+          docker build -t ${ECR_URL}:${IMAGE_TAG} -f backend/Dockerfile backend/
+          docker tag ${ECR_URL}:${IMAGE_TAG} ${ECR_URL}:latest
+
+          echo "Pushing backend image..."
+          docker push ${ECR_URL}:${IMAGE_TAG}
+          docker push ${ECR_URL}:latest
+
+          echo "✅ Backend pushed: ${ECR_URL}:${IMAGE_TAG}"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # UPDATE MANIFESTS
+  # ═══════════════════════════════════════════════════════════════════════════
+  update-manifests:
+    name: "📝 Update Manifests"
+    needs: [verify-bootstrap, build-frontend, build-backend, security-scan]
+    # RULE 42: Run even when builds skipped
+    if: always() && needs.verify-bootstrap.result == 'success' && (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Update Kustomization
+        run: |
+          ENVIRONMENT="${{ needs.verify-bootstrap.outputs.environment }}"
+          IMAGE_TAG="${{ needs.verify-bootstrap.outputs.image_tag }}"
+          KUSTOMIZATION_FILE=".opsera-${{ env.APP_NAME }}/k8s/overlays/${ENVIRONMENT}/kustomization.yaml"
+
+          echo "Updating image tags to: ${IMAGE_TAG}"
+
+          # Update image tags using sed
+          sed -i "s/newTag: .*/newTag: ${IMAGE_TAG}/g" "$KUSTOMIZATION_FILE"
+
+          cat "$KUSTOMIZATION_FILE"
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .opsera-${{ env.APP_NAME }}/k8s/overlays/
+
+          git diff --cached --quiet || git commit -m "chore(${{ env.APP_NAME }}): update images to ${{ needs.verify-bootstrap.outputs.image_tag }} [skip ci]
+
+          Environment: ${{ needs.verify-bootstrap.outputs.environment }}
+          Frontend: ${{ needs.verify-bootstrap.outputs.ecr_frontend }}:${{ needs.verify-bootstrap.outputs.image_tag }}
+          Backend: ${{ needs.verify-bootstrap.outputs.ecr_backend }}:${{ needs.verify-bootstrap.outputs.image_tag }}
+
+          Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+
+          git pull --rebase origin main
+          git push origin main
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SYNC ARGOCD & MONITOR
+  # ═══════════════════════════════════════════════════════════════════════════
+  sync-and-monitor:
+    name: "🔄 Sync & Monitor Deployment"
+    needs: [verify-bootstrap, update-manifests]
+    if: always() && needs.update-manifests.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_success: ${{ steps.monitor.outputs.success }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Force ArgoCD Sync (RULE 66)
+        run: |
+          APP_NAME="${{ env.APP_NAME }}-${{ needs.verify-bootstrap.outputs.environment }}"
+
+          # Force hard refresh
+          kubectl annotate application ${APP_NAME} -n argocd \
+            argocd.argoproj.io/refresh=hard --overwrite
+
+          echo "✅ ArgoCD sync triggered for: ${APP_NAME}"
+
+      - name: Monitor Deployment
+        id: monitor
+        run: |
+          ENVIRONMENT="${{ needs.verify-bootstrap.outputs.environment }}"
+          NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${ENVIRONMENT}"
+
+          # Switch to spoke cluster for pod monitoring
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          echo "Waiting for deployment to be ready..."
+
+          # RULE 43: Environment-aware timeout (dev=5min)
+          TIMEOUT=300
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # Check if namespace exists
+            if ! kubectl get namespace $NAMESPACE &>/dev/null; then
+              echo "Namespace not created yet..."
+              sleep 15
+              ELAPSED=$((ELAPSED + 15))
+              continue
+            fi
+
+            # Check pod status
+            READY=$(kubectl get pods -n $NAMESPACE -l app=${{ env.APP_NAME }} -o jsonpath='{.items[*].status.containerStatuses[*].ready}' 2>/dev/null | tr ' ' '\n' | grep -c true || echo 0)
+            TOTAL=$(kubectl get pods -n $NAMESPACE -l app=${{ env.APP_NAME }} --no-headers 2>/dev/null | wc -l || echo 0)
+
+            echo "Pods ready: ${READY}/${TOTAL}"
+
+            if [ "$TOTAL" -gt 0 ] && [ "$READY" -ge 2 ]; then
+              echo "✅ Deployment ready!"
+              echo "success=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "⚠️ Deployment not ready within timeout"
+          echo "success=false" >> $GITHUB_OUTPUT
+
+          # Show current state for debugging
+          kubectl get pods -n $NAMESPACE -o wide || true
+          kubectl get events -n $NAMESPACE --sort-by='.lastTimestamp' | tail -20 || true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SUMMARY
+  # ═══════════════════════════════════════════════════════════════════════════
+  summary:
+    name: "📋 Pipeline Summary"
+    needs: [verify-bootstrap, build-frontend, build-backend, update-manifests, sync-and-monitor]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          DEPLOY_SUCCESS="${{ needs.sync-and-monitor.outputs.deploy_success }}"
+          ENVIRONMENT="${{ needs.verify-bootstrap.outputs.environment }}"
+          IMAGE_TAG="${{ needs.verify-bootstrap.outputs.image_tag }}"
+
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # 📋 Pipeline Summary
+
+          ## Build Details
+          | Field | Value |
+          |-------|-------|
+          | **Environment** | \`${ENVIRONMENT}\` |
+          | **Image Tag** | \`${IMAGE_TAG}\` |
+          | **Frontend ECR** | \`${{ needs.verify-bootstrap.outputs.ecr_frontend }}\` |
+          | **Backend ECR** | \`${{ needs.verify-bootstrap.outputs.ecr_backend }}\` |
+
+          ## Job Results
+          | Job | Status |
+          |-----|--------|
+          | Verify Bootstrap | ${{ needs.verify-bootstrap.result }} |
+          | Security Scan | ${{ needs.security-scan.result || 'skipped' }} |
+          | Build Frontend | ${{ needs.build-frontend.result }} |
+          | Build Backend | ${{ needs.build-backend.result }} |
+          | Update Manifests | ${{ needs.update-manifests.result }} |
+          | Deploy | ${DEPLOY_SUCCESS:-pending} |
+
+          ## Access
+          - **URL**: https://opsera-${{ env.APP_NAME }}-${ENVIRONMENT}.${{ env.DOMAIN }}
+          - **Status**: $([ "${DEPLOY_SUCCESS}" = "true" ] && echo "✅ Ready" || echo "⏳ Pending")
+
+          EOF
+
+      - name: Slack Notification
+        if: always() && vars.SLACK_CHANNEL != ''
+        uses: slackapi/slack-github-action@v1.25.0
+        continue-on-error: true
+        with:
+          channel-id: '${{ vars.SLACK_CHANNEL }}'
+          payload: |
+            {
+              "text": "${{ needs.sync-and-monitor.outputs.deploy_success == 'true' && '✅' || '⚠️' }} Deployment ${{ needs.sync-and-monitor.outputs.deploy_success == 'true' && 'succeeded' || 'needs attention' }} for `${{ env.APP_NAME }}`",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ needs.sync-and-monitor.outputs.deploy_success == 'true' && '✅ Deployment Succeeded' || '⚠️ Deployment Needs Attention' }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {"type": "mrkdwn", "text": "*App:*\n`${{ env.APP_NAME }}`"},
+                    {"type": "mrkdwn", "text": "*Env:*\n`${{ needs.verify-bootstrap.outputs.environment }}`"},
+                    {"type": "mrkdwn", "text": "*Tag:*\n`${{ needs.verify-bootstrap.outputs.image_tag }}`"},
+                    {"type": "mrkdwn", "text": "*By:*\n${{ github.actor }}"}
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [{
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "View Workflow"},
+                    "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

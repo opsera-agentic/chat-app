@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sperigpt4
+  labels:
+    app: sperigpt4
+    tenant: opsera
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    # RULE 104: Use wildcard TLS certificate
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # WebSocket support for chat functionality
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - opsera-sperigpt4-dev.agent.opsera.dev
+      # RULE 104: Wildcard TLS secret (shared across all apps)
+      secretName: opsera-wildcard-tls
+  rules:
+    - host: opsera-sperigpt4-dev.agent.opsera.dev
+      http:
+        paths:
+          # Frontend serves everything, nginx proxies /api to backend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sperigpt4-frontend
+                port:
+                  number: 80

@@ -1,0 +1,116 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPSERA CODE-TO-CLOUD ENTERPRISE CONFIGURATION
+# Generated: 2026-01-31 | Version: 1.7.3
+# ═══════════════════════════════════════════════════════════════════════════════
+# This is the SINGLE SOURCE OF TRUTH for all deployment settings (RULE 60)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+app:
+  name: sperigpt4
+  type: fullstack                    # frontend + backend
+  description: "ChatGPT-powered chat application with React frontend and FastAPI backend"
+
+tenant:
+  name: opsera
+  # Resource naming follows RULE 100-102:
+  # - Namespace: {tenant}-{app}-{env}
+  # - Hostname: {tenant}-{app}-{env}.{domain}
+  # - ECR: {tenant}/{app}-{component}
+
+cloud:
+  provider: aws
+  region: us-west-2
+  region_short: usw2
+  account_id: "${AWS_ACCOUNT_ID}"    # Dynamically fetched (RULE 7)
+
+kubernetes:
+  # Hub-Spoke Architecture (RULE 58-61)
+  hub_cluster: argocd-usw2           # ArgoCD control plane
+  spoke_cluster: opsera-usw2-np      # Workload cluster
+
+environments:
+  dev:
+    enabled: true
+    namespace: opsera-sperigpt4-dev
+    hostname: opsera-sperigpt4-dev.agent.opsera.dev
+    deployment_strategy: rolling
+    replicas: 2
+
+  qa:
+    enabled: false                   # Enable when ready
+    namespace: opsera-sperigpt4-qa
+    hostname: opsera-sperigpt4-qa.agent.opsera.dev
+    deployment_strategy: canary
+    replicas: 3
+
+  staging:
+    enabled: false                   # Enable when ready
+    namespace: opsera-sperigpt4-staging
+    hostname: opsera-sperigpt4-staging.agent.opsera.dev
+    deployment_strategy: blue-green
+    replicas: 3
+
+components:
+  frontend:
+    type: react-vite
+    dockerfile: frontend/Dockerfile
+    port: 80
+    health_check: /
+    ecr_repo: opsera/sperigpt4-frontend
+
+  backend:
+    type: fastapi
+    dockerfile: backend/Dockerfile
+    port: 8000
+    health_check: /health
+    ecr_repo: opsera/sperigpt4-backend
+    env_vars:
+      - OPENAI_API_KEY              # From K8s secret
+
+dns:
+  domain: agent.opsera.dev
+  hosted_zone_id: "${ROUTE53_HOSTED_ZONE_ID}"
+  record_type: CNAME
+
+tls:
+  strategy: wildcard                 # RULE 104: Avoid Let's Encrypt rate limits
+  secret_name: opsera-wildcard-tls
+  cluster_issuer: letsencrypt-prod
+
+ingress:
+  class: nginx
+  shared: true                       # RULE 23: Shared NGINX Ingress pattern
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+
+integrations:
+  slack:
+    enabled: true
+    channel: "${SLACK_CHANNEL}"
+  jira:
+    enabled: false
+  sonarqube:
+    enabled: false
+  gitleaks:
+    enabled: true
+    mode: warn                       # Non-blocking
+  grype:
+    enabled: true
+    mode: warn                       # Non-blocking
+    severity_threshold: critical
+
+promotion:
+  auto_promote: false                # RULE 65: Manual promotion until verified
+  require_approval: true             # RULE 95: Manual intervention required
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENERATED RESOURCE NAMES (for reference)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Namespace:     opsera-sperigpt4-dev
+# Hostname:      opsera-sperigpt4-dev.agent.opsera.dev
+# ECR Frontend:  {account}.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-frontend
+# ECR Backend:   {account}.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-backend
+# TLS Secret:    opsera-wildcard-tls (shared)
+# ArgoCD App:    sperigpt4-dev
+# ═══════════════════════════════════════════════════════════════════════════════

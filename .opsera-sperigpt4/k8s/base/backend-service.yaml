@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sperigpt4-backend
+  labels:
+    app: sperigpt4
+    component: backend
+    tenant: opsera
+spec:
+  # RULE 23: Services MUST be type ClusterIP (NOT LoadBalancer) for shared ingress
+  type: ClusterIP
+  selector:
+    app: sperigpt4
+    component: backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

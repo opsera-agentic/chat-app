@@ -1,0 +1,518 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# BOOTSTRAP INFRASTRUCTURE - sperigpt4
+# Code-to-Cloud Enterprise v1.7.3
+#
+# This workflow sets up all infrastructure prerequisites:
+# - ECR repositories (frontend + backend)
+# - Spoke cluster registration with ArgoCD hub
+# - ArgoCD Application for GitOps
+# - NGINX Ingress Controller with named Load Balancer
+# - Wildcard TLS certificate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: "🏗️ sperigpt4: Bootstrap Infrastructure"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to bootstrap'
+        type: choice
+        options: [dev]
+        default: dev
+      skip_spoke_registration:
+        description: 'Skip spoke registration (if already registered)'
+        type: boolean
+        default: false
+      confirm:
+        description: '☑️ I confirm this bootstrap operation'
+        type: boolean
+        default: false
+        required: true
+
+env:
+  APP_NAME: sperigpt4
+  TENANT: opsera
+  AWS_REGION: us-west-2
+  SPOKE_CLUSTER: opsera-usw2-np
+  HUB_CLUSTER: argocd-usw2
+  DOMAIN: agent.opsera.dev
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VALIDATION
+  # ═══════════════════════════════════════════════════════════════════════════
+  validate:
+    name: "✅ Validate Inputs"
+    runs-on: ubuntu-latest
+    if: inputs.confirm == true
+    outputs:
+      environment: ${{ inputs.environment }}
+      namespace: ${{ steps.vars.outputs.namespace }}
+      hostname: ${{ steps.vars.outputs.hostname }}
+    steps:
+      - name: Calculate Variables
+        id: vars
+        run: |
+          NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+          HOSTNAME="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}.${{ env.DOMAIN }}"
+
+          echo "namespace=${NAMESPACE}" >> $GITHUB_OUTPUT
+          echo "hostname=${HOSTNAME}" >> $GITHUB_OUTPUT
+
+          echo "### 📋 Bootstrap Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App | \`${{ env.APP_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tenant | \`${{ env.TENANT }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | \`${NAMESPACE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hostname | \`${HOSTNAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Spoke Cluster | \`${{ env.SPOKE_CLUSTER }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hub Cluster | \`${{ env.HUB_CLUSTER }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ECR REPOSITORIES
+  # ═══════════════════════════════════════════════════════════════════════════
+  create-ecr:
+    name: "📦 Create ECR Repositories"
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          echo "AWS Account: ${ACCOUNT_ID}"
+
+      - name: Create Frontend ECR Repository
+        run: |
+          REPO_NAME="${{ env.TENANT }}/${{ env.APP_NAME }}-frontend"
+
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null; then
+            echo "✅ Frontend ECR repository already exists"
+          else
+            aws ecr create-repository \
+              --repository-name "$REPO_NAME" \
+              --image-scanning-configuration scanOnPush=true \
+              --tags Key=tenant,Value=${{ env.TENANT }} Key=app,Value=${{ env.APP_NAME }}
+            echo "✅ Created frontend ECR repository: $REPO_NAME"
+          fi
+
+      - name: Create Backend ECR Repository
+        run: |
+          REPO_NAME="${{ env.TENANT }}/${{ env.APP_NAME }}-backend"
+
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null; then
+            echo "✅ Backend ECR repository already exists"
+          else
+            aws ecr create-repository \
+              --repository-name "$REPO_NAME" \
+              --image-scanning-configuration scanOnPush=true \
+              --tags Key=tenant,Value=${{ env.TENANT }} Key=app,Value=${{ env.APP_NAME }}
+            echo "✅ Created backend ECR repository: $REPO_NAME"
+          fi
+
+      - name: Summary
+        run: |
+          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+          echo "### 📦 ECR Repositories" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-frontend\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}-backend\`" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SPOKE CLUSTER REGISTRATION (RULE 103: Only in infrastructure setup)
+  # ═══════════════════════════════════════════════════════════════════════════
+  register-spoke:
+    name: "🔗 Register Spoke with ArgoCD Hub"
+    needs: [validate, create-ecr]
+    runs-on: ubuntu-latest
+    if: inputs.skip_spoke_registration == false
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check if Spoke Already Registered
+        id: check
+        run: |
+          # Configure kubectl for hub cluster
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          # Check if cluster secret exists (RULE 103)
+          if kubectl get secret "cluster-${{ env.SPOKE_CLUSTER }}" -n argocd &>/dev/null; then
+            echo "✅ Spoke cluster already registered with ArgoCD"
+            echo "registered=true" >> $GITHUB_OUTPUT
+          else
+            echo "📝 Spoke cluster needs registration"
+            echo "registered=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Register Spoke Cluster
+        if: steps.check.outputs.registered == 'false'
+        run: |
+          # Get spoke cluster endpoint and CA
+          SPOKE_ENDPOINT=$(aws eks describe-cluster --name ${{ env.SPOKE_CLUSTER }} --query 'cluster.endpoint' --output text)
+          SPOKE_CA=$(aws eks describe-cluster --name ${{ env.SPOKE_CLUSTER }} --query 'cluster.certificateAuthority.data' --output text)
+
+          # Configure kubectl for spoke cluster to create service account
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          # Create ArgoCD manager service account on spoke
+          kubectl create serviceaccount argocd-manager -n kube-system --dry-run=client -o yaml | kubectl apply -f -
+
+          # Create cluster role binding
+          kubectl create clusterrolebinding argocd-manager-role \
+            --clusterrole=cluster-admin \
+            --serviceaccount=kube-system:argocd-manager \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Generate token (RULE 62: K8s 1.24+ compatibility)
+          TOKEN=$(kubectl create token argocd-manager -n kube-system --duration=87600h)
+
+          # Switch to hub cluster
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          # Create cluster secret on hub
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cluster-${{ env.SPOKE_CLUSTER }}
+            namespace: argocd
+            labels:
+              argocd.argoproj.io/secret-type: cluster
+          type: Opaque
+          stringData:
+            name: ${{ env.SPOKE_CLUSTER }}
+            server: ${SPOKE_ENDPOINT}
+            config: |
+              {
+                "bearerToken": "${TOKEN}",
+                "tlsClientConfig": {
+                  "insecure": false,
+                  "caData": "${SPOKE_CA}"
+                }
+              }
+          EOF
+
+          echo "✅ Spoke cluster registered with ArgoCD hub"
+
+      - name: Summary
+        run: |
+          echo "### 🔗 Spoke Registration" >> $GITHUB_STEP_SUMMARY
+          echo "- Spoke Cluster: \`${{ env.SPOKE_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Hub Cluster: \`${{ env.HUB_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ✅ Registered" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ARGOCD APPLICATION
+  # ═══════════════════════════════════════════════════════════════════════════
+  create-argocd-app:
+    name: "🔄 Create ArgoCD Application"
+    needs: [validate, register-spoke]
+    # RULE 89: Handle skipped job state
+    if: always() && needs.validate.result == 'success' && (needs.register-spoke.result == 'success' || needs.register-spoke.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update ArgoCD Application with Correct Repo URL
+        run: |
+          # Get the actual repository URL
+          REPO_URL="https://github.com/${{ github.repository }}.git"
+
+          # Update the ArgoCD application file
+          sed -i "s|repoURL: .*|repoURL: ${REPO_URL}|g" .opsera-${{ env.APP_NAME }}/argocd/${{ inputs.environment }}/application.yaml
+
+          echo "Updated repoURL to: ${REPO_URL}"
+          cat .opsera-${{ env.APP_NAME }}/argocd/${{ inputs.environment }}/application.yaml
+
+      - name: Configure kubectl for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Create ArgoCD Repository Secret (RULE 63)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "⚠️ GH_PAT not set - ArgoCD may not be able to access private repo"
+            exit 0
+          fi
+
+          SECRET_NAME="repo-${{ env.APP_NAME }}"
+          REPO_URL="https://github.com/${{ github.repository }}.git"
+
+          if kubectl get secret "$SECRET_NAME" -n argocd &>/dev/null; then
+            echo "✅ Repository secret already exists"
+          else
+            kubectl create secret generic "$SECRET_NAME" -n argocd \
+              --from-literal=type=git \
+              --from-literal=url="$REPO_URL" \
+              --from-literal=username=git \
+              --from-literal=password="$GH_PAT"
+
+            kubectl label secret "$SECRET_NAME" -n argocd \
+              argocd.argoproj.io/secret-type=repository
+
+            echo "✅ Created ArgoCD repository secret"
+          fi
+
+      - name: Apply ArgoCD Application
+        run: |
+          kubectl apply -f .opsera-${{ env.APP_NAME }}/argocd/${{ inputs.environment }}/application.yaml
+          echo "✅ ArgoCD Application created: ${{ env.APP_NAME }}-${{ inputs.environment }}"
+
+      - name: Verify Application Created
+        run: |
+          sleep 5
+          kubectl get application ${{ env.APP_NAME }}-${{ inputs.environment }} -n argocd -o wide
+
+          echo "### 🔄 ArgoCD Application" >> $GITHUB_STEP_SUMMARY
+          echo "- Application: \`${{ env.APP_NAME }}-${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Destination: \`${{ env.SPOKE_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Namespace: \`${{ needs.validate.outputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NGINX INGRESS & TLS
+  # ═══════════════════════════════════════════════════════════════════════════
+  setup-ingress:
+    name: "🌐 Setup NGINX Ingress & TLS"
+    needs: [validate, create-argocd-app]
+    if: always() && needs.create-argocd-app.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      lb_hostname: ${{ steps.lb.outputs.hostname }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Check/Install NGINX Ingress Controller
+        run: |
+          # Check if NGINX Ingress is already installed
+          if kubectl get namespace ingress-nginx &>/dev/null; then
+            echo "✅ ingress-nginx namespace exists"
+
+            if kubectl get deployment ingress-nginx-controller -n ingress-nginx &>/dev/null; then
+              echo "✅ NGINX Ingress Controller already installed"
+            else
+              echo "📦 Installing NGINX Ingress Controller..."
+              helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+              helm repo update
+
+              # RULE 92: Named load balancer
+              helm install ingress-nginx ingress-nginx/ingress-nginx \
+                -n ingress-nginx \
+                --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-name"="${{ env.TENANT }}-${{ env.APP_NAME }}-ingress-usw2" \
+                --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"="nlb" \
+                --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"="internet-facing"
+            fi
+          else
+            echo "📦 Installing NGINX Ingress Controller..."
+            helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+            helm repo update
+
+            helm install ingress-nginx ingress-nginx/ingress-nginx \
+              -n ingress-nginx --create-namespace \
+              --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-name"="${{ env.TENANT }}-${{ env.APP_NAME }}-ingress-usw2" \
+              --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"="nlb" \
+              --set controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"="internet-facing"
+          fi
+
+      - name: Wait for Load Balancer
+        id: lb
+        run: |
+          echo "Waiting for Load Balancer to be provisioned..."
+
+          for i in {1..30}; do
+            LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+            if [ -n "$LB_HOSTNAME" ]; then
+              echo "✅ Load Balancer ready: $LB_HOSTNAME"
+              echo "hostname=${LB_HOSTNAME}" >> $GITHUB_OUTPUT
+              break
+            fi
+
+            echo "Attempt $i/30 - waiting..."
+            sleep 10
+          done
+
+          if [ -z "$LB_HOSTNAME" ]; then
+            echo "⚠️ Load Balancer not ready yet - may need more time"
+            LB_HOSTNAME=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' || echo "pending")
+            echo "hostname=${LB_HOSTNAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check/Install cert-manager
+        run: |
+          if kubectl get namespace cert-manager &>/dev/null; then
+            echo "✅ cert-manager already installed"
+          else
+            echo "📦 Installing cert-manager..."
+            kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+            echo "Waiting for cert-manager to be ready..."
+            kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=5m
+          fi
+
+      - name: Create ClusterIssuer
+        run: |
+          if kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
+            echo "✅ ClusterIssuer already exists"
+          else
+            cat <<EOF | kubectl apply -f -
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt-prod
+          spec:
+            acme:
+              email: devops@opsera.io
+              server: https://acme-v02.api.letsencrypt.org/directory
+              privateKeySecretRef:
+                name: letsencrypt-prod-key
+              solvers:
+                - http01:
+                    ingress:
+                      class: nginx
+          EOF
+            echo "✅ ClusterIssuer created"
+          fi
+
+      - name: Summary
+        run: |
+          echo "### 🌐 Ingress & TLS" >> $GITHUB_STEP_SUMMARY
+          echo "- NGINX Ingress: ✅ Installed" >> $GITHUB_STEP_SUMMARY
+          echo "- Load Balancer: \`${{ steps.lb.outputs.hostname }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- cert-manager: ✅ Installed" >> $GITHUB_STEP_SUMMARY
+          echo "- ClusterIssuer: \`letsencrypt-prod\`" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # UPDATE KUSTOMIZATION WITH ACCOUNT ID
+  # ═══════════════════════════════════════════════════════════════════════════
+  update-manifests:
+    name: "📝 Update Manifests"
+    needs: [validate, setup-ingress]
+    if: always() && needs.setup-ingress.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+      - name: Update Kustomization with Account ID
+        run: |
+          ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+          KUSTOMIZATION_FILE=".opsera-${{ env.APP_NAME }}/k8s/overlays/${{ inputs.environment }}/kustomization.yaml"
+
+          # Replace placeholder with actual account ID
+          sed -i "s/PLACEHOLDER_ACCOUNT_ID/${ACCOUNT_ID}/g" "$KUSTOMIZATION_FILE"
+
+          echo "Updated kustomization.yaml with account ID: ${ACCOUNT_ID}"
+          cat "$KUSTOMIZATION_FILE"
+
+      - name: Commit Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+          git diff --cached --quiet || git commit -m "chore(${{ env.APP_NAME }}): update manifests with AWS account ID [skip ci]
+
+          - Updated ECR image references
+          - Updated ArgoCD application repoURL
+
+          Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+
+          git pull --rebase origin main
+          git push origin main
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FINAL SUMMARY
+  # ═══════════════════════════════════════════════════════════════════════════
+  summary:
+    name: "📋 Bootstrap Summary"
+    needs: [validate, create-ecr, register-spoke, create-argocd-app, setup-ingress, update-manifests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          cat << 'EOF' >> $GITHUB_STEP_SUMMARY
+
+          ---
+
+          ## 🎉 Bootstrap Complete!
+
+          ### Next Steps
+
+          1. **Setup DNS** (one-time):
+             ```bash
+             gh workflow run "dns-setup-sperigpt4.yaml" -f environment=dev
+             ```
+
+          2. **Create OpenAI Secret** (on spoke cluster):
+             ```bash
+             kubectl create secret generic sperigpt4-secrets \
+               -n opsera-sperigpt4-dev \
+               --from-literal=openai-api-key=YOUR_OPENAI_API_KEY
+             ```
+
+          3. **Trigger First Deployment**:
+             ```bash
+             git push origin main  # Or trigger CI workflow manually
+             ```
+
+          4. **Access Application**:
+             - URL: `https://opsera-sperigpt4-dev.agent.opsera.dev`
+             - (After DNS propagation and TLS certificate issuance)
+
+          EOF

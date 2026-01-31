@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sperigpt4-backend
+  labels:
+    app: sperigpt4
+    component: backend
+    tenant: opsera
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sperigpt4
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: sperigpt4
+        component: backend
+        tenant: opsera
+    spec:
+      # RULE 81: imagePullSecrets REQUIRED for private ECR
+      imagePullSecrets:
+        - name: ecr-registry-secret
+      containers:
+        - name: backend
+          image: sperigpt4-backend:latest
+          # RULE 80: imagePullPolicy: Always for Argo Rollouts compatibility
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sperigpt4-secrets
+                  key: openai-api-key
+                  optional: true
+            - name: ENVIRONMENT
+              value: "dev"
+            - name: CORS_ORIGINS
+              value: "*"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          securityContext:
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+      restartPolicy: Always
