@@ -1,0 +1,39 @@
+# ArgoCD Application - QA Environment
+# RULE 59: Use destination.name for hub-spoke architecture
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatgptsperi6-qa
+  namespace: argocd
+  labels:
+    app: chatgptsperi6
+    environment: qa
+    tenant: opsera
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/opsera-agentic/chat-app.git
+    targetRevision: HEAD
+    path: .opsera-chatgptsperi6/k8s/overlays/qa
+
+  destination:
+    # CRITICAL: Use 'name' for spoke cluster (RULE 59)
+    name: opsera-usw2-np
+    namespace: opsera-chatgptsperi6-qa
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chatgptsperi6-ingress
+spec:
+  rules:
+    - host: opsera-chatgptsperi6-qa.agent.opsera.dev
+      http:
+        paths:
+          # Backend API routes
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: chatgptsperi6-backend
+                port:
+                  number: 8000
+          # Frontend routes (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chatgptsperi6-frontend
+                port:
+                  number: 80

@@ -42,10 +42,11 @@ environments:
     strategy: rolling
     auto_sync: true
   qa:
-    enabled: false
+    enabled: true
     namespace: opsera-chatgptsperi6-qa
     replicas: 3
     strategy: canary
+    auto_sync: true
   staging:
     enabled: false
     namespace: opsera-chatgptsperi6-staging

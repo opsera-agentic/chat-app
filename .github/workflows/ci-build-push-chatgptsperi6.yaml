@@ -17,7 +17,7 @@ on:
       environment:
         description: 'Target environment'
         type: choice
-        options: [dev]
+        options: [dev, qa]
         default: 'dev'
       skip_build:
         description: 'Skip build (use existing image)'

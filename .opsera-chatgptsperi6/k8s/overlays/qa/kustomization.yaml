@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: opsera-chatgptsperi6-qa
+
+resources:
+  - ../../base
+
+patches:
+  - path: ingress-patch.yaml
+
+labels:
+  - pairs:
+      environment: qa
+      deployment-strategy: canary
+    includeSelectors: false
+
+# Images will be updated by CI/CD pipeline
+images:
+  - name: chatgptsperi6-frontend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-frontend
+    newTag: c522b39-20260131124109
+  - name: chatgptsperi6-backend
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-backend
+    newTag: c522b39-20260131124109
+
+# Replica count for QA environment (canary strategy)
+replicas:
+  - name: chatgptsperi6-frontend
+    count: 3
+  - name: chatgptsperi6-backend
+    count: 3
