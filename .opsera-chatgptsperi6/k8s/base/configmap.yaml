@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chatgptsperi6-config
+  labels:
+    app: chatgptsperi6
+data:
+  ENVIRONMENT: "dev"
+  FRONTEND_URL: "https://opsera-chatgptsperi6-dev.agent.opsera.dev"
+  BACKEND_URL: "http://chatgptsperi6-backend:8000"
+  CORS_ORIGINS: "https://opsera-chatgptsperi6-dev.agent.opsera.dev"

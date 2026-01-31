@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opsera-chatgptsperi6-dev
+  labels:
+    app: chatgptsperi6
+    tenant: opsera

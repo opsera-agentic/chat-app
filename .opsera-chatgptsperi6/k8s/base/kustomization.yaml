@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: opsera-chatgptsperi6-dev
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - ingress.yaml
+
+commonLabels:
+  app: chatgptsperi6
+  tenant: opsera
+  managed-by: opsera-code-to-cloud
+
+images:
+  - name: chatgptsperi6-frontend
+    newName: PLACEHOLDER_ECR_FRONTEND
+    newTag: latest
+  - name: chatgptsperi6-backend
+    newName: PLACEHOLDER_ECR_BACKEND
+    newTag: latest

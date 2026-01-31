@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatgptsperi6-backend
+  labels:
+    app: chatgptsperi6
+    component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chatgptsperi6
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: chatgptsperi6
+        component: backend
+    spec:
+      containers:
+        - name: backend
+          image: chatgptsperi6-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: chatgptsperi6-config
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: chatgptsperi6-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      imagePullSecrets:
+        - name: ecr-registry-secret

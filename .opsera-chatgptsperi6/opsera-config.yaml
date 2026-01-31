@@ -1,0 +1,77 @@
+# Opsera Code-to-Cloud Configuration
+# Generated: 2026-01-31
+# Skill Version: 1.7.3
+
+app:
+  name: chatgptsperi6
+  type: fullstack
+  description: "ChatGPT-powered fullstack application"
+
+tenant:
+  name: opsera
+
+cloud:
+  provider: aws
+  region: us-west-2
+  region_short: usw2
+
+architecture:
+  type: hub-spoke
+  hub_cluster: argocd-usw2
+  spoke_cluster: opsera-usw2-np
+
+components:
+  frontend:
+    name: chatgptsperi6-frontend
+    framework: react-vite
+    port: 80
+    dockerfile: frontend/Dockerfile
+    health_path: /
+  backend:
+    name: chatgptsperi6-backend
+    framework: fastapi
+    port: 8000
+    dockerfile: backend/Dockerfile
+    health_path: /health
+
+environments:
+  dev:
+    enabled: true
+    namespace: opsera-chatgptsperi6-dev
+    replicas: 2
+    strategy: rolling
+    auto_sync: true
+  qa:
+    enabled: false
+    namespace: opsera-chatgptsperi6-qa
+    replicas: 3
+    strategy: canary
+  staging:
+    enabled: false
+    namespace: opsera-chatgptsperi6-staging
+    replicas: 3
+    strategy: blue-green
+
+dns:
+  base_domain: agent.opsera.dev
+  pattern: "opsera-{app}-{env}.agent.opsera.dev"
+
+tls:
+  strategy: wildcard
+  secret_name: opsera-wildcard-tls
+  cluster_issuer: letsencrypt-prod
+
+ecr:
+  frontend: opsera/chatgptsperi6-frontend
+  backend: opsera/chatgptsperi6-backend
+
+integrations:
+  slack:
+    enabled: false
+  gitleaks:
+    enabled: true
+    mode: warn
+  grype:
+    enabled: true
+    mode: warn
+    severity_threshold: high

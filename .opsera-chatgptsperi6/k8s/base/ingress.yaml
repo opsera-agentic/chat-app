@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chatgptsperi6-ingress
+  labels:
+    app: chatgptsperi6
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Route /api/* to backend, strip /api prefix
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - opsera-chatgptsperi6-dev.agent.opsera.dev
+      secretName: opsera-wildcard-tls
+  rules:
+    - host: opsera-chatgptsperi6-dev.agent.opsera.dev
+      http:
+        paths:
+          # Backend API routes
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: chatgptsperi6-backend
+                port:
+                  number: 8000
+          # Frontend routes (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chatgptsperi6-frontend
+                port:
+                  number: 80
