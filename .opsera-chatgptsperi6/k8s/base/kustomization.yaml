@@ -19,8 +19,8 @@ commonLabels:
 
 images:
   - name: chatgptsperi6-frontend
-    newName: PLACEHOLDER_ECR_FRONTEND
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-frontend
     newTag: latest
   - name: chatgptsperi6-backend
-    newName: PLACEHOLDER_ECR_BACKEND
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-backend
     newTag: latest

@@ -12,11 +12,11 @@ commonLabels:
 # Images will be updated by CI/CD pipeline
 images:
   - name: chatgptsperi6-frontend
-    newName: PLACEHOLDER_ECR_FRONTEND
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-frontend
+    newTag: d005b97-20260131121342
   - name: chatgptsperi6-backend
-    newName: PLACEHOLDER_ECR_BACKEND
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chatgptsperi6-backend
+    newTag: d005b97-20260131121342
 
 # Replica count for DEV environment
 replicas:
