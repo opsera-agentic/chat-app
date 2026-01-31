@@ -6,8 +6,10 @@ namespace: opsera-chatgptsperi6-dev
 resources:
   - ../../base
 
-commonLabels:
-  environment: dev
+labels:
+  - pairs:
+      environment: dev
+    includeSelectors: false
 
 # Images will be updated by CI/CD pipeline
 images:

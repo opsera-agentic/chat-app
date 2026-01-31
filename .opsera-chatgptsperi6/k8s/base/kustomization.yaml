@@ -12,10 +12,12 @@ resources:
   - frontend-service.yaml
   - ingress.yaml
 
-commonLabels:
-  app: chatgptsperi6
-  tenant: opsera
-  managed-by: opsera-code-to-cloud
+labels:
+  - pairs:
+      app: chatgptsperi6
+      tenant: opsera
+      managed-by: opsera-code-to-cloud
+    includeSelectors: false
 
 images:
   - name: chatgptsperi6-frontend
