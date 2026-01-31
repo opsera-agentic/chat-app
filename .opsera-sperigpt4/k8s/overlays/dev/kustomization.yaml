@@ -13,10 +13,10 @@ commonLabels:
 images:
   - name: sperigpt4-frontend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-frontend
-    newTag: 7a2b84f-20260131120932
+    newTag: 2bd8241-20260131144514
   - name: sperigpt4-backend
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/sperigpt4-backend
-    newTag: 7a2b84f-20260131120932
+    newTag: 2bd8241-20260131144514
 
 # Patches for dev environment
 patches:
