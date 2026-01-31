@@ -16,7 +16,7 @@ load_dotenv()
 app = FastAPI(
     title="Chat App API",
     description="Backend API for the Chat Application with OpenAI integration",
-    version="1.0.0"
+    version="1.0.1"  # chatgptsperi6 deployment
 )
 
 # Configure CORS - Support environment variable for production
