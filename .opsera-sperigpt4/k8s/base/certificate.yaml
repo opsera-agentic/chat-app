@@ -1,0 +1,21 @@
+# TLS Certificate for sperigpt4
+# cert-manager will request this certificate from Let's Encrypt
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sperigpt4-tls
+  labels:
+    app: sperigpt4
+    tenant: opsera
+spec:
+  # Secret name must match what's referenced in the Ingress
+  secretName: opsera-wildcard-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  # Duration and renewal settings
+  duration: 2160h    # 90 days
+  renewBefore: 360h  # 15 days before expiry
+  # DNS names to include in the certificate
+  dnsNames:
+    - opsera-sperigpt4-dev.agent.opsera.dev

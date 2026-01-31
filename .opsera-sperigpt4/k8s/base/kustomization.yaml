@@ -11,6 +11,7 @@ resources:
   - backend-deployment.yaml
   - backend-service.yaml
   - ingress.yaml
+  - certificate.yaml
 
 commonLabels:
   app: sperigpt4
