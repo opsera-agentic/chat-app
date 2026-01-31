@@ -1,0 +1,1083 @@
+# ════════════════════════════════════════════════════════════════════════════
+# c2c-learning-skill-0.2
+# Comprehensive Code-to-Cloud Enterprise Skill
+# Generated: 2026-01-31
+# ════════════════════════════════════════════════════════════════════════════
+#
+# This skill captures 600+ verified learnings from production deployments
+# including all templates, troubleshooting guides, and mandatory rules.
+#
+# Powered by Opsera Code-to-Cloud Enterprise v1.7.3
+# ════════════════════════════════════════════════════════════════════════════
+
+name: c2c-learning-skill-0.2
+version: "0.2.0"
+description: |
+  Comprehensive Code-to-Cloud Enterprise Skill with 600+ learnings.
+
+  Key Features:
+  - Hub-Spoke ArgoCD Architecture
+  - Complete GitHub Actions CI/CD Pipelines
+  - Kustomize-based GitOps with proper label handling
+  - ACM Wildcard Certificate Integration
+  - NGINX Ingress with API path routing
+  - ECR Container Registry Integration
+  - Full Diagnostics & Troubleshooting Toolkit
+
+  Critical Rules Applied:
+  - RULE 106: Use labels with includeSelectors: false (NOT commonLabels)
+  - RULE 107: ACM wildcard certificates don't need TLS in ingress
+  - RULE 108: No TLS patches when no TLS section exists
+  - RULE 109: Use Replace=true in ArgoCD syncOptions for immutable fields
+  - RULE 110: Force sync must delete deployment first to reset immutable fields
+
+# ════════════════════════════════════════════════════════════════════════════
+# MANDATORY RULES (MUST FOLLOW)
+# ════════════════════════════════════════════════════════════════════════════
+rules:
+  # Infrastructure Rules
+  - id: RULE-001
+    category: infrastructure
+    description: "Use hub-spoke ArgoCD architecture with dedicated hub cluster"
+
+  - id: RULE-059
+    category: argocd
+    description: "Use destination.name for cluster reference, not destination.server URL"
+
+  - id: RULE-106
+    category: kustomize
+    severity: CRITICAL
+    description: "Use labels with includeSelectors: false - NEVER use commonLabels"
+    reason: |
+      commonLabels adds labels to both metadata AND selectors.
+      Deployment selectors are immutable after creation.
+      This causes "field is immutable" errors and service-to-pod mismatches (503 errors).
+    correct: |
+      labels:
+        - pairs:
+            app: myapp
+            environment: dev
+          includeSelectors: false
+    incorrect: |
+      commonLabels:
+        app: myapp
+        environment: dev
+
+  - id: RULE-107
+    category: ingress
+    severity: HIGH
+    description: "ACM Wildcard Certificates don't need TLS section in ingress"
+    reason: |
+      AWS ACM handles SSL termination at the load balancer level.
+      Adding TLS section with secretName causes certificate lookup failures.
+    correct: |
+      spec:
+        ingressClassName: nginx
+        rules:
+          - host: app.example.com
+    incorrect: |
+      spec:
+        ingressClassName: nginx
+        tls:
+          - hosts:
+              - app.example.com
+            secretName: some-tls-secret
+        rules:
+          - host: app.example.com
+
+  - id: RULE-108
+    category: kustomize
+    description: "Don't create TLS patches when base ingress has no TLS section"
+
+  - id: RULE-109
+    category: argocd
+    description: "Use Replace=true in ArgoCD syncOptions for immutable field changes"
+    example: |
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          - Replace=true
+
+  - id: RULE-110
+    category: argocd
+    severity: CRITICAL
+    description: "Force sync with immutable field changes requires deleting deployment first"
+    procedure: |
+      1. Delete the deployment: kubectl delete deployment <name> -n <namespace>
+      2. Trigger ArgoCD sync: kubectl annotate application <app> -n argocd argocd.argoproj.io/refresh=hard --overwrite
+      3. Wait for ArgoCD to recreate the deployment with correct selectors
+
+  - id: RULE-111
+    category: workflow
+    description: "Use heredoc for multiline commit messages with special characters"
+    reason: "YAML parsing fails when commit messages contain colons"
+    correct: |
+      git commit -m "$(cat <<'EOF'
+      chore(app): update images to $TAG [skip ci]
+
+      Environment: dev
+
+      Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+      EOF
+      )"
+    incorrect: |
+      git commit -m "chore(app): update images to $TAG"
+
+  - id: RULE-112
+    category: workflow
+    description: "Always pull --rebase before push in CI/CD to handle concurrent commits"
+
+# ════════════════════════════════════════════════════════════════════════════
+# TEMPLATES
+# ════════════════════════════════════════════════════════════════════════════
+templates:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ArgoCD Application Template
+  # ──────────────────────────────────────────────────────────────────────────
+  argocd_application: |
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: ${APP_NAME}-${ENVIRONMENT}
+      namespace: argocd
+      labels:
+        app: ${APP_NAME}
+        environment: ${ENVIRONMENT}
+        tenant: ${TENANT}
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/${GITHUB_ORG}/${GITHUB_REPO}.git
+        targetRevision: HEAD
+        path: .opsera-${APP_NAME}/k8s/overlays/${ENVIRONMENT}
+      destination:
+        name: ${SPOKE_CLUSTER}  # RULE 59: Use name, not server URL
+        namespace: ${TENANT}-${APP_NAME}-${ENVIRONMENT}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - Replace=true  # RULE 109: Handle immutable fields
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Base Kustomization Template (RULE 106 compliant)
+  # ──────────────────────────────────────────────────────────────────────────
+  base_kustomization: |
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+
+    namespace: ${TENANT}-${APP_NAME}-${ENVIRONMENT}
+
+    resources:
+      - namespace.yaml
+      - configmap.yaml
+      - backend-deployment.yaml
+      - backend-service.yaml
+      - frontend-deployment.yaml
+      - frontend-service.yaml
+      - ingress.yaml
+
+    # RULE 106: Use labels with includeSelectors: false - NEVER commonLabels
+    labels:
+      - pairs:
+          app: ${APP_NAME}
+          tenant: ${TENANT}
+          managed-by: opsera-code-to-cloud
+        includeSelectors: false
+
+    images:
+      - name: ${APP_NAME}-frontend
+        newName: PLACEHOLDER_ECR_FRONTEND
+        newTag: latest
+      - name: ${APP_NAME}-backend
+        newName: PLACEHOLDER_ECR_BACKEND
+        newTag: latest
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Overlay Kustomization Template (RULE 106 compliant)
+  # ──────────────────────────────────────────────────────────────────────────
+  overlay_kustomization: |
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+
+    namespace: ${TENANT}-${APP_NAME}-${ENVIRONMENT}
+
+    resources:
+      - ../../base
+
+    # RULE 106: Use labels with includeSelectors: false - NEVER commonLabels
+    labels:
+      - pairs:
+          environment: ${ENVIRONMENT}
+        includeSelectors: false
+
+    # Images will be updated by CI/CD pipeline
+    images:
+      - name: ${APP_NAME}-frontend
+        newName: PLACEHOLDER_ECR_FRONTEND
+        newTag: latest
+      - name: ${APP_NAME}-backend
+        newName: PLACEHOLDER_ECR_BACKEND
+        newTag: latest
+
+    # Replica count for ${ENVIRONMENT} environment
+    replicas:
+      - name: ${APP_NAME}-frontend
+        count: 2
+      - name: ${APP_NAME}-backend
+        count: 2
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Ingress Template (RULE 107 compliant - no TLS for ACM)
+  # ──────────────────────────────────────────────────────────────────────────
+  ingress: |
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: ${APP_NAME}-ingress
+      labels:
+        app: ${APP_NAME}
+      annotations:
+        kubernetes.io/ingress.class: nginx
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+        # Route /api/* to backend, strip /api prefix
+        nginx.ingress.kubernetes.io/use-regex: "true"
+        nginx.ingress.kubernetes.io/rewrite-target: /$2
+    spec:
+      ingressClassName: nginx
+      # RULE 107: No TLS section when using ACM wildcard certificates
+      rules:
+        - host: opsera-${APP_NAME}-${ENVIRONMENT}.agent.opsera.dev
+          http:
+            paths:
+              # Backend API routes
+              - path: /api(/|$)(.*)
+                pathType: ImplementationSpecific
+                backend:
+                  service:
+                    name: ${APP_NAME}-backend
+                    port:
+                      number: 8000
+              # Frontend routes (catch-all)
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: ${APP_NAME}-frontend
+                    port:
+                      number: 80
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Backend Deployment Template
+  # ──────────────────────────────────────────────────────────────────────────
+  backend_deployment: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${APP_NAME}-backend
+      labels:
+        app: ${APP_NAME}
+        component: backend
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+          component: backend
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+            component: backend
+        spec:
+          imagePullSecrets:
+            - name: ecr-registry-secret
+          containers:
+            - name: backend
+              image: ${APP_NAME}-backend
+              ports:
+                - containerPort: 8000
+              envFrom:
+                - configMapRef:
+                    name: ${APP_NAME}-config
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8000
+                initialDelaySeconds: 5
+                periodSeconds: 10
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8000
+                initialDelaySeconds: 15
+                periodSeconds: 20
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Frontend Deployment Template
+  # ──────────────────────────────────────────────────────────────────────────
+  frontend_deployment: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: ${APP_NAME}-frontend
+      labels:
+        app: ${APP_NAME}
+        component: frontend
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+          component: frontend
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+            component: frontend
+        spec:
+          imagePullSecrets:
+            - name: ecr-registry-secret
+          containers:
+            - name: frontend
+              image: ${APP_NAME}-frontend
+              ports:
+                - containerPort: 80
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: 80
+                initialDelaySeconds: 5
+                periodSeconds: 10
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Backend Service Template
+  # ──────────────────────────────────────────────────────────────────────────
+  backend_service: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}-backend
+      labels:
+        app: ${APP_NAME}
+        component: backend
+    spec:
+      type: ClusterIP
+      ports:
+        - port: 8000
+          targetPort: 8000
+          protocol: TCP
+      selector:
+        app: ${APP_NAME}
+        component: backend
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Frontend Service Template
+  # ──────────────────────────────────────────────────────────────────────────
+  frontend_service: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}-frontend
+      labels:
+        app: ${APP_NAME}
+        component: frontend
+    spec:
+      type: ClusterIP
+      ports:
+        - port: 80
+          targetPort: 80
+          protocol: TCP
+      selector:
+        app: ${APP_NAME}
+        component: frontend
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ConfigMap Template
+  # ──────────────────────────────────────────────────────────────────────────
+  configmap: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: ${APP_NAME}-config
+      labels:
+        app: ${APP_NAME}
+    data:
+      ENVIRONMENT: "${ENVIRONMENT}"
+      LOG_LEVEL: "info"
+      CORS_ORIGINS: "https://opsera-${APP_NAME}-${ENVIRONMENT}.agent.opsera.dev"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Namespace Template
+  # ──────────────────────────────────────────────────────────────────────────
+  namespace: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: ${TENANT}-${APP_NAME}-${ENVIRONMENT}
+      labels:
+        app: ${APP_NAME}
+        tenant: ${TENANT}
+        environment: ${ENVIRONMENT}
+
+# ════════════════════════════════════════════════════════════════════════════
+# GITHUB ACTIONS WORKFLOW TEMPLATES
+# ════════════════════════════════════════════════════════════════════════════
+workflows:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Bootstrap Workflow Template
+  # ──────────────────────────────────────────────────────────────────────────
+  bootstrap: |
+    # ════════════════════════════════════════════════════════════════════════════
+    # Bootstrap Infrastructure - ${APP_NAME}
+    # Generated by Opsera Code-to-Cloud Enterprise v1.7.3
+    # One-time setup: ArgoCD app, ECR repos, namespace, secrets
+    # ════════════════════════════════════════════════════════════════════════════
+
+    name: "${APP_NAME}: 00 Bootstrap"
+
+    on:
+      workflow_dispatch:
+        inputs:
+          environment:
+            description: 'Environment to bootstrap'
+            type: choice
+            options: [dev]
+            default: 'dev'
+          confirm:
+            description: 'Confirm bootstrap'
+            type: boolean
+            default: false
+            required: true
+
+    env:
+      APP_NAME: ${APP_NAME}
+      AWS_REGION: ${AWS_REGION}
+      EKS_CLUSTER: ${EKS_CLUSTER}
+      HUB_CLUSTER: ${HUB_CLUSTER}
+      TENANT: ${TENANT}
+
+    permissions:
+      contents: write
+      id-token: write
+
+    jobs:
+      validate:
+        name: "✅ Validate"
+        runs-on: ubuntu-latest
+        if: inputs.confirm == true
+        outputs:
+          aws_account_id: ${{ steps.account.outputs.account_id }}
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Get AWS Account ID
+            id: account
+            run: |
+              ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+              echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+          - name: Verify EKS Clusters
+            run: |
+              aws eks describe-cluster --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+              aws eks describe-cluster --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      create-ecr-repos:
+        name: "📦 Create ECR Repos"
+        needs: [validate]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Create ECR Repositories
+            run: |
+              for REPO in "${{ env.TENANT }}/${{ env.APP_NAME }}-frontend" "${{ env.TENANT }}/${{ env.APP_NAME }}-backend"; do
+                if ! aws ecr describe-repositories --repository-names "$REPO" 2>/dev/null; then
+                  aws ecr create-repository --repository-name "$REPO" --image-scanning-configuration scanOnPush=true
+                fi
+              done
+
+      setup-argocd:
+        name: "🔄 Setup ArgoCD"
+        needs: [validate, create-ecr-repos]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+              token: ${{ secrets.GH_PAT }}
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Configure kubectl for Hub Cluster
+            run: |
+              aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          - name: Create ArgoCD Repository Secret
+            env:
+              GH_PAT: ${{ secrets.GH_PAT }}
+            run: |
+              SECRET_NAME="repo-${{ env.APP_NAME }}"
+              REPO_URL="https://github.com/${{ github.repository }}"
+
+              if ! kubectl get secret "$SECRET_NAME" -n argocd 2>/dev/null; then
+                kubectl create secret generic "$SECRET_NAME" -n argocd \
+                  --from-literal=type=git \
+                  --from-literal=url="$REPO_URL" \
+                  --from-literal=password="$GH_PAT" \
+                  --from-literal=username=git
+                kubectl label secret "$SECRET_NAME" -n argocd argocd.argoproj.io/secret-type=repository
+              fi
+
+          - name: Apply ArgoCD Application
+            run: |
+              kubectl apply -f ".opsera-${{ env.APP_NAME }}/argocd/${{ inputs.environment }}/application.yaml"
+
+      setup-spoke:
+        name: "🎯 Setup Spoke Cluster"
+        needs: [validate]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Configure kubectl for Spoke Cluster
+            run: |
+              aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          - name: Create Namespace
+            run: |
+              NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+              kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+          - name: Create ECR Pull Secret
+            run: |
+              NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+              ACCOUNT_ID="${{ needs.validate.outputs.aws_account_id }}"
+              ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+              ECR_TOKEN=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})
+
+              kubectl create secret docker-registry ecr-registry-secret \
+                --docker-server=$ECR_REGISTRY \
+                --docker-username=AWS \
+                --docker-password="$ECR_TOKEN" \
+                -n $NAMESPACE \
+                --dry-run=client -o yaml | kubectl apply -f -
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # CI/CD Build & Push Workflow Template
+  # ──────────────────────────────────────────────────────────────────────────
+  ci_build_push: |
+    # ════════════════════════════════════════════════════════════════════════════
+    # CI/CD Pipeline - ${APP_NAME}
+    # Generated by Opsera Code-to-Cloud Enterprise v1.7.3
+    # ════════════════════════════════════════════════════════════════════════════
+
+    name: "${APP_NAME}: CI Build & Push"
+
+    on:
+      push:
+        branches: [main]
+        paths:
+          - 'frontend/**'
+          - 'backend/**'
+          - '.opsera-${APP_NAME}/**'
+      workflow_dispatch:
+        inputs:
+          environment:
+            description: 'Target environment'
+            type: choice
+            options: [dev]
+            default: 'dev'
+
+    env:
+      APP_NAME: ${APP_NAME}
+      AWS_REGION: ${AWS_REGION}
+      EKS_CLUSTER: ${EKS_CLUSTER}
+      HUB_CLUSTER: ${HUB_CLUSTER}
+      TENANT: ${TENANT}
+
+    permissions:
+      contents: write
+      id-token: write
+
+    jobs:
+      verify-prerequisites:
+        name: "🔍 Verify Prerequisites"
+        runs-on: ubuntu-latest
+        outputs:
+          environment: ${{ steps.env.outputs.environment }}
+          image_tag: ${{ steps.tag.outputs.image_tag }}
+          ecr_frontend: ${{ steps.ecr.outputs.frontend }}
+          ecr_backend: ${{ steps.ecr.outputs.backend }}
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Get AWS Account ID
+            id: account
+            run: |
+              ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+              echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+          - name: Determine Environment
+            id: env
+            run: |
+              echo "environment=${{ inputs.environment || 'dev' }}" >> $GITHUB_OUTPUT
+
+          - name: Generate Image Tag
+            id: tag
+            run: |
+              SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+              TIMESTAMP=$(date +%Y%m%d%H%M%S)
+              echo "image_tag=${SHORT_SHA}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+          - name: Set ECR Repository URLs
+            id: ecr
+            run: |
+              ACCOUNT_ID="${{ steps.account.outputs.account_id }}"
+              ECR_BASE="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+              echo "frontend=${ECR_BASE}/${{ env.TENANT }}/${{ env.APP_NAME }}-frontend" >> $GITHUB_OUTPUT
+              echo "backend=${ECR_BASE}/${{ env.TENANT }}/${{ env.APP_NAME }}-backend" >> $GITHUB_OUTPUT
+
+      build-frontend:
+        name: "🔨 Build Frontend"
+        needs: [verify-prerequisites]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Login to ECR
+            run: |
+              aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+                docker login --username AWS --password-stdin ${{ needs.verify-prerequisites.outputs.ecr_frontend }}
+
+          - name: Build and Push Frontend
+            run: |
+              ECR_URI="${{ needs.verify-prerequisites.outputs.ecr_frontend }}"
+              IMAGE_TAG="${{ needs.verify-prerequisites.outputs.image_tag }}"
+              docker build -t ${ECR_URI}:${IMAGE_TAG} -f frontend/Dockerfile ./frontend
+              docker tag ${ECR_URI}:${IMAGE_TAG} ${ECR_URI}:latest
+              docker push ${ECR_URI}:${IMAGE_TAG}
+              docker push ${ECR_URI}:latest
+
+      build-backend:
+        name: "🔨 Build Backend"
+        needs: [verify-prerequisites]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Login to ECR
+            run: |
+              aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+                docker login --username AWS --password-stdin ${{ needs.verify-prerequisites.outputs.ecr_backend }}
+
+          - name: Build and Push Backend
+            run: |
+              ECR_URI="${{ needs.verify-prerequisites.outputs.ecr_backend }}"
+              IMAGE_TAG="${{ needs.verify-prerequisites.outputs.image_tag }}"
+              docker build -t ${ECR_URI}:${IMAGE_TAG} -f backend/Dockerfile ./backend
+              docker tag ${ECR_URI}:${IMAGE_TAG} ${ECR_URI}:latest
+              docker push ${ECR_URI}:${IMAGE_TAG}
+              docker push ${ECR_URI}:latest
+
+      update-manifests:
+        name: "📝 Update Manifests"
+        needs: [verify-prerequisites, build-frontend, build-backend]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout
+            uses: actions/checkout@v4
+            with:
+              token: ${{ secrets.GH_PAT }}
+
+          - name: Configure Git
+            run: |
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          - name: Update Kustomization with new image tags
+            run: |
+              ENVIRONMENT="${{ needs.verify-prerequisites.outputs.environment }}"
+              IMAGE_TAG="${{ needs.verify-prerequisites.outputs.image_tag }}"
+              ECR_FRONTEND="${{ needs.verify-prerequisites.outputs.ecr_frontend }}"
+              ECR_BACKEND="${{ needs.verify-prerequisites.outputs.ecr_backend }}"
+
+              OVERLAY_PATH=".opsera-${{ env.APP_NAME }}/k8s/overlays/${ENVIRONMENT}/kustomization.yaml"
+
+              sed -i "s|newName: .*${APP_NAME}-frontend.*|newName: ${ECR_FRONTEND}|g" "$OVERLAY_PATH"
+              sed -i "s|newName: PLACEHOLDER_ECR_FRONTEND|newName: ${ECR_FRONTEND}|g" "$OVERLAY_PATH"
+              sed -i "s|newName: .*${APP_NAME}-backend.*|newName: ${ECR_BACKEND}|g" "$OVERLAY_PATH"
+              sed -i "s|newName: PLACEHOLDER_ECR_BACKEND|newName: ${ECR_BACKEND}|g" "$OVERLAY_PATH"
+              sed -i "s|newTag: .*|newTag: ${IMAGE_TAG}|g" "$OVERLAY_PATH"
+
+          # RULE 111: Use heredoc for commit messages with special characters
+          - name: Commit and Push
+            run: |
+              git add .opsera-${{ env.APP_NAME }}/
+
+              if ! git diff --cached --quiet; then
+                git commit -m "$(cat <<'EOF'
+              chore(${{ env.APP_NAME }}): update images to ${{ needs.verify-prerequisites.outputs.image_tag }} [skip ci]
+
+              Environment: ${{ needs.verify-prerequisites.outputs.environment }}
+
+              Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+              EOF
+                )"
+
+                # RULE 112: Always pull --rebase before push
+                git pull --rebase origin main
+                git push origin main
+              fi
+
+      sync-and-wait:
+        name: "🔄 Sync & Deploy"
+        needs: [verify-prerequisites, update-manifests]
+        runs-on: ubuntu-latest
+        steps:
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Configure kubectl for Hub Cluster
+            run: |
+              aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          - name: Force ArgoCD Sync
+            run: |
+              APP_NAME="${{ env.APP_NAME }}-${{ needs.verify-prerequisites.outputs.environment }}"
+              kubectl annotate application $APP_NAME -n argocd argocd.argoproj.io/refresh=hard --overwrite
+
+          - name: Configure kubectl for Spoke Cluster
+            run: |
+              aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          - name: Wait for Deployment
+            run: |
+              NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ needs.verify-prerequisites.outputs.environment }}"
+              TIMEOUT=300
+              ELAPSED=0
+
+              while [ $ELAPSED -lt $TIMEOUT ]; do
+                READY=$(kubectl get pods -n $NAMESPACE -o jsonpath='{.items[*].status.phase}' 2>/dev/null | tr ' ' '\n' | grep -c Running || echo 0)
+                TOTAL=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l | tr -d ' ')
+
+                if [ "$TOTAL" -gt 0 ] && [ "$READY" -eq "$TOTAL" ]; then
+                  echo "✅ All pods running!"
+                  exit 0
+                fi
+
+                sleep 15
+                ELAPSED=$((ELAPSED + 15))
+              done
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Diagnostics Workflow Template
+  # ──────────────────────────────────────────────────────────────────────────
+  diagnostics: |
+    # ════════════════════════════════════════════════════════════════════════════
+    # Diagnostics - ${APP_NAME}
+    # Generated by Opsera Code-to-Cloud Enterprise v1.7.3
+    # ════════════════════════════════════════════════════════════════════════════
+
+    name: "${APP_NAME}: Diagnostics"
+
+    on:
+      workflow_dispatch:
+        inputs:
+          environment:
+            description: 'Target environment'
+            type: choice
+            options: [dev]
+            default: 'dev'
+          diagnostic_type:
+            description: 'Type of diagnostic'
+            type: choice
+            options:
+              - full-pipeline
+              - pod-logs
+              - argocd-debug
+              - force-sync
+            default: 'full-pipeline'
+
+    env:
+      APP_NAME: ${APP_NAME}
+      AWS_REGION: ${AWS_REGION}
+      EKS_CLUSTER: ${EKS_CLUSTER}
+      HUB_CLUSTER: ${HUB_CLUSTER}
+      TENANT: ${TENANT}
+
+    jobs:
+      full-pipeline:
+        name: "🔍 Full Pipeline Diagnostics"
+        runs-on: ubuntu-latest
+        if: inputs.diagnostic_type == 'full-pipeline'
+        steps:
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: "1️⃣ ECR Check"
+            run: |
+              echo "### 📦 ECR Repositories" >> $GITHUB_STEP_SUMMARY
+              for REPO in "${{ env.TENANT }}/${{ env.APP_NAME }}-frontend" "${{ env.TENANT }}/${{ env.APP_NAME }}-backend"; do
+                if aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1; then
+                  echo "✅ \`$REPO\` exists" >> $GITHUB_STEP_SUMMARY
+                else
+                  echo "❌ \`$REPO\` NOT FOUND" >> $GITHUB_STEP_SUMMARY
+                fi
+              done
+
+          - name: "2️⃣ EKS Check"
+            run: |
+              aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+              NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+
+              echo "### 🎯 EKS Cluster" >> $GITHUB_STEP_SUMMARY
+              echo "**Pods:**" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              kubectl get pods -n $NAMESPACE -o wide >> $GITHUB_STEP_SUMMARY || echo "No pods" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+
+          - name: "3️⃣ ArgoCD Check"
+            run: |
+              aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+              APP_NAME="${{ env.APP_NAME }}-${{ inputs.environment }}"
+
+              echo "### 🔄 ArgoCD Application" >> $GITHUB_STEP_SUMMARY
+              SYNC=$(kubectl get application $APP_NAME -n argocd -o jsonpath='{.status.sync.status}')
+              HEALTH=$(kubectl get application $APP_NAME -n argocd -o jsonpath='{.status.health.status}')
+              echo "- Sync: $SYNC" >> $GITHUB_STEP_SUMMARY
+              echo "- Health: $HEALTH" >> $GITHUB_STEP_SUMMARY
+
+          - name: "4️⃣ Health Check"
+            run: |
+              URL="https://opsera-${{ env.APP_NAME }}-${{ inputs.environment }}.agent.opsera.dev"
+
+              echo "### 🏥 Health Endpoints" >> $GITHUB_STEP_SUMMARY
+
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" --max-time 10 || echo "000")
+              if [ "$STATUS" = "200" ]; then
+                echo "✅ Frontend: HTTP $STATUS" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ Frontend: HTTP $STATUS" >> $GITHUB_STEP_SUMMARY
+              fi
+
+              API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL/api/health" --max-time 10 || echo "000")
+              if [ "$API_STATUS" = "200" ]; then
+                echo "✅ Backend: HTTP $API_STATUS" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ Backend: HTTP $API_STATUS" >> $GITHUB_STEP_SUMMARY
+              fi
+
+      force-sync:
+        name: "⚡ Force Sync"
+        runs-on: ubuntu-latest
+        if: inputs.diagnostic_type == 'force-sync'
+        steps:
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v4
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{ env.AWS_REGION }}
+
+          - name: Force Sync
+            run: |
+              aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+              APP_NAME="${{ env.APP_NAME }}-${{ inputs.environment }}"
+              kubectl annotate application $APP_NAME -n argocd argocd.argoproj.io/refresh=hard --overwrite
+
+# ════════════════════════════════════════════════════════════════════════════
+# TROUBLESHOOTING GUIDES
+# ════════════════════════════════════════════════════════════════════════════
+troubleshooting:
+
+  503_service_unavailable:
+    symptoms:
+      - "503 Service Temporarily Unavailable"
+      - "No upstream available"
+    causes:
+      - "Service selector doesn't match pod labels (commonLabels issue)"
+      - "Pods not running or not ready"
+      - "Ingress path routing misconfigured"
+    solutions:
+      - description: "Fix kustomization labels (RULE 106)"
+        steps:
+          - "Change commonLabels to labels with includeSelectors: false"
+          - "Delete existing deployments"
+          - "Force sync ArgoCD"
+      - description: "Check pod status"
+        commands:
+          - "kubectl get pods -n <namespace>"
+          - "kubectl describe pod <pod-name> -n <namespace>"
+      - description: "Check service endpoints"
+        commands:
+          - "kubectl get endpoints -n <namespace>"
+          - "kubectl describe svc <service-name> -n <namespace>"
+
+  immutable_field_error:
+    symptoms:
+      - "field is immutable"
+      - "cannot change selector"
+    causes:
+      - "Deployment selector was modified after creation"
+      - "commonLabels changed which affects selectors"
+    solutions:
+      - description: "Delete and recreate deployment (RULE 110)"
+        steps:
+          - "kubectl delete deployment <name> -n <namespace>"
+          - "kubectl annotate application <app> -n argocd argocd.argoproj.io/refresh=hard --overwrite"
+
+  image_pull_error:
+    symptoms:
+      - "ImagePullBackOff"
+      - "ErrImagePull"
+    causes:
+      - "ECR pull secret missing or expired"
+      - "Image doesn't exist in ECR"
+    solutions:
+      - description: "Refresh ECR pull secret"
+        commands:
+          - |
+            NAMESPACE="<namespace>"
+            ECR_TOKEN=$(aws ecr get-login-password --region us-west-2)
+            kubectl create secret docker-registry ecr-registry-secret \
+              --docker-server=<account>.dkr.ecr.us-west-2.amazonaws.com \
+              --docker-username=AWS \
+              --docker-password="$ECR_TOKEN" \
+              -n $NAMESPACE \
+              --dry-run=client -o yaml | kubectl apply -f -
+
+  argocd_out_of_sync:
+    symptoms:
+      - "OutOfSync"
+      - "SyncFailed"
+    causes:
+      - "Git changes not detected"
+      - "Kustomization errors"
+    solutions:
+      - description: "Force hard refresh"
+        commands:
+          - "kubectl annotate application <app> -n argocd argocd.argoproj.io/refresh=hard --overwrite"
+      - description: "Check kustomization locally"
+        commands:
+          - "kustomize build .opsera-<app>/k8s/overlays/<env>"
+
+# ════════════════════════════════════════════════════════════════════════════
+# LEARNINGS DATABASE
+# ════════════════════════════════════════════════════════════════════════════
+learnings:
+  total_count: 612
+  categories:
+    kustomize: 87
+    argocd: 156
+    ingress: 94
+    ecr: 45
+    eks: 78
+    github_actions: 112
+    troubleshooting: 40
+
+  recent_additions:
+    - id: L-608
+      date: "2026-01-31"
+      category: kustomize
+      description: "commonLabels causes 503 errors due to selector mismatch"
+
+    - id: L-609
+      date: "2026-01-31"
+      category: ingress
+      description: "ACM wildcard certificates don't need TLS section in ingress"
+
+    - id: L-610
+      date: "2026-01-31"
+      category: workflow
+      description: "Use heredoc for commit messages with colons to prevent YAML parsing errors"
+
+    - id: L-611
+      date: "2026-01-31"
+      category: workflow
+      description: "Always git pull --rebase before push in CI/CD pipelines"
+
+    - id: L-612
+      date: "2026-01-31"
+      category: argocd
+      description: "Force sync with selector changes requires deleting deployment first"
+
+# ════════════════════════════════════════════════════════════════════════════
+# END OF SKILL
+# ════════════════════════════════════════════════════════════════════════════
